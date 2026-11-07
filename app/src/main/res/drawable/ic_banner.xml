@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Deep crimson-black gradient background -->
+    <path android:pathData="M0,0h320v180h-320z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="320"
+                android:endY="180"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF1A0508" />
+                <item android:offset="0.55" android:color="#FF0F0407" />
+                <item android:offset="1.0" android:color="#FF28060D" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Subtle top highlight glow -->
+    <path
+        android:fillColor="#18FF1744"
+        android:pathData="M0,0h320v54h-320z" />
+
+    <!-- YouTube-style rounded play badge on the left -->
+    <path
+        android:fillColor="#FFFF0033"
+        android:pathData="M48,58 C48,49.16 55.16,42 64,42 L116,42 C124.84,42 132,49.16 132,58 L132,102 C132,110.84 124.84,118 116,118 L64,118 C55.16,118 48,110.84 48,102 Z" />
+
+    <!-- White play triangle inside badge -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M79,64 L107,80 L79,96 Z" />
+
+    <!-- Lightning / Speed bolt accent on badge corner -->
+    <path
+        android:fillColor="#FF00E676"
+        android:pathData="M124,36 L114,52 L123,52 L117,68 L134,48 L124,48 Z" />
+
+    <!-- Stylized "VagiiArk" geometric bars / typography indicator -->
+    <!-- V -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M152,58 L160,58 L168,86 L176,58 L184,58 L172,96 L164,96 Z" />
+    <!-- A -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M196,58 L204,58 L216,96 L208,96 L205,86 L195,86 L192,96 L184,96 Z M197,79 L203,79 L200,67 Z" />
+    <!-- R -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M222,58 L238,58 C244,58 248,62 248,68 C248,73 245,77 240,78 L249,96 L240,96 L232,79 L230,79 L230,96 L222,96 Z M230,65 L230,73 L237,73 C239,73 240,71 240,69 C240,67 239,65 237,65 Z" />
+    <!-- K -->
+    <path
+        android:fillColor="#FFFF1744"
+        android:pathData="M255,58 L263,58 L263,74 L277,58 L287,58 L271,75 L288,96 L278,96 L263,78 L263,96 L255,96 Z" />
+
+    <!-- Feature pills row at bottom: AdBlock | SponsorBlock | 4x Speed -->
+    <path
+        android:fillColor="#26FFFFFF"
+        android:pathData="M48,132 C48,128 51,125 55,125 L115,125 C119,125 122,128 122,132 L122,144 C122,148 119,151 115,151 L55,151 C51,151 48,148 48,144 Z" />
+    <path
+        android:fillColor="#FF00E676"
+        android:pathData="M58,138 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#CCFFFFFF"
+        android:pathData="M68,135h44v6h-44z" />
+
+    <path
+        android:fillColor="#26FFFFFF"
+        android:pathData="M130,132 C130,128 133,125 137,125 L205,125 C209,125 212,128 212,132 L212,144 C212,148 209,151 205,151 L137,151 C133,151 130,148 130,144 Z" />
+    <path
+        android:fillColor="#FF00B0FF"
+        android:pathData="M140,138 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#CCFFFFFF"
+        android:pathData="M150,135h52v6h-52z" />
+
+    <path
+        android:fillColor="#26FFFFFF"
+        android:pathData="M220,132 C220,128 223,125 227,125 L280,125 C284,125 287,128 287,132 L287,144 C287,148 284,151 280,151 L227,151 C223,151 220,148 220,144 Z" />
+    <path
+        android:fillColor="#FFFFD600"
+        android:pathData="M230,138 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#CCFFFFFF"
+        android:pathData="M240,135h36v6h-36z" />
+
+</vector>
