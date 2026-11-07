@@ -27,16 +27,14 @@
                 return origIsTypeSupported(mimeType);
             };
         }
-        // Spoof 1920x1080 screen dimensions to YouTube's ABR engine so it ALWAYS selects 1080p HD
-        // even though the Xiaomi MiTV-MSSP2 UI surface is 1280x720!
+        // NOTE: Do NOT override window.innerWidth or window.innerHeight (that shifts the 1280x720
+        // WebView viewport off-center!). Instead, only spoof screen.width/height & devicePixelRatio=1.5
+        // so YouTube's quality selector unlocks 1080p (1280 * 1.5 = 1920) while the UI fits 1280x720!
         try {
-            Object.defineProperty(window, 'innerWidth', { get: function () { return 1920; }, configurable: true });
-            Object.defineProperty(window, 'innerHeight', { get: function () { return 1080; }, configurable: true });
+            Object.defineProperty(window, 'devicePixelRatio', { get: function () { return 1.5; }, configurable: true });
             if (window.screen) {
                 Object.defineProperty(window.screen, 'width', { get: function () { return 1920; }, configurable: true });
                 Object.defineProperty(window.screen, 'height', { get: function () { return 1080; }, configurable: true });
-                Object.defineProperty(window.screen, 'availWidth', { get: function () { return 1920; }, configurable: true });
-                Object.defineProperty(window.screen, 'availHeight', { get: function () { return 1080; }, configurable: true });
             }
         } catch (e) {}
     } catch (e) {}
@@ -95,6 +93,8 @@
             ytlr-promoted-video-renderer,
             ytlr-sparkles-web-renderer,
             ytlr-companion-ad-renderer,
+            ytlr-ad-feed-entry-renderer,
+            ytlr-tile-renderer:has([aria-label*="Sponsored"]),
             .ytp-ad-module,
             .ytp-ad-overlay-container,
             .ytp-ad-player-overlay,
@@ -150,31 +150,26 @@
             }
             ${config.videoAspectMode === 'fill' ? `
             /* Fullscreen Zoom-to-Fill: expands 4:3 / 1.5:1 music videos to fill the 16:9 TV screen with zero black sidebars */
-            .html5-main-video, video {
-                width: 100vw !important;
-                height: 100vh !important;
-                left: 0 !important;
-                top: 0 !important;
-                object-fit: cover !important;
+            .html5-main-video, ytlr-player video, #player video {
+                transform: scale(1.34) !important;
+                transform-origin: center center !important;
             }
             ` : config.videoAspectMode === 'stretch' ? `
-            /* Fullscreen 16:9 Stretch: stretches video edge-to-edge without cropping */
-            .html5-main-video, video {
-                width: 100vw !important;
-                height: 100vh !important;
-                left: 0 !important;
-                top: 0 !important;
-                object-fit: fill !important;
+            /* Fullscreen 16:9 Stretch: stretches 4:3 video horizontally edge-to-edge without cropping top/bottom */
+            .html5-main-video, ytlr-player video, #player video {
+                transform: scaleX(1.34) !important;
+                transform-origin: center center !important;
             }
             ` : ''}
             ${config.colorBoostMode === 'vivid' ? `
-            /* Expand Limited-Range YUV (16-235) to Full-Range (0-255) & restore BT.709 color saturation */
-            .html5-main-video, video {
+            /* Expand Limited-Range YUV (16-235) to Full-Range (0-255) & restore BT.709 color saturation
+               Applied to the player container so the hardware <video> decoder never jumps to top-left! */
+            .html5-video-container, ytlr-player {
                 filter: contrast(1.14) saturate(1.26) brightness(0.98) !important;
             }
             ` : config.colorBoostMode === 'cinema' ? `
             /* Deep Cinema Contrast & Punchy Saturation */
-            .html5-main-video, video {
+            .html5-video-container, ytlr-player {
                 filter: contrast(1.22) saturate(1.38) brightness(0.96) !important;
             }
             ` : ''}
