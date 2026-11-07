@@ -117,6 +117,7 @@ public class MainActivity extends Activity {
     private boolean sponsorBlockEnabled = true;
     private boolean fastModeEnabled = true;
     private String videoAspectMode = "fit"; // "fit", "fill", "stretch"
+    private String colorBoostMode = "vivid"; // "vivid" (Full Range Rich Color), "cinema" (Deep Contrast), "off" (Standard)
     private double playbackSpeed = 1.0;
     private int adsBlockedCount = 0;
     private int segmentsSkippedCount = 0;
@@ -128,9 +129,6 @@ public class MainActivity extends Activity {
 
     // Manual SponsorBlock skip prompt state
     private volatile boolean manualSkipPromptVisible = false;
-
-    // Visible top-right "⚡ VagiiArk" Settings Pill Button (reachable by D-pad UP or click)
-    private Button floatingSettingsBtn;
 
     private long okKeyDownTime = 0L;
     private boolean okLongPressTriggered = false;
@@ -245,6 +243,7 @@ public class MainActivity extends Activity {
         sponsorBlockEnabled = prefs.getBoolean("sponsorblock_enabled", true);
         fastModeEnabled = prefs.getBoolean("fast_mode", true);
         videoAspectMode = prefs.getString("video_aspect_mode", "fit");
+        colorBoostMode = prefs.getString("color_boost_mode", "vivid");
         playbackSpeed = Double.longBitsToDouble(
                 prefs.getLong("playback_speed_bits", Double.doubleToLongBits(1.0))
         );
@@ -260,6 +259,7 @@ public class MainActivity extends Activity {
         ed.putBoolean("sponsorblock_enabled", sponsorBlockEnabled);
         ed.putBoolean("fast_mode", fastModeEnabled);
         ed.putString("video_aspect_mode", videoAspectMode);
+        ed.putString("color_boost_mode", colorBoostMode);
         ed.putLong("playback_speed_bits", Double.doubleToLongBits(playbackSpeed));
         ed.putInt("ads_blocked_count", adsBlockedCount);
         ed.putInt("segments_skipped_count", segmentsSkippedCount);
@@ -427,6 +427,7 @@ public class MainActivity extends Activity {
             obj.put("sponsorBlockEnabled", sponsorBlockEnabled);
             obj.put("fastMode", fastModeEnabled);
             obj.put("videoAspectMode", videoAspectMode);
+            obj.put("colorBoostMode", colorBoostMode);
             obj.put("speed", playbackSpeed);
 
             JSONObject cats = new JSONObject();
@@ -471,62 +472,6 @@ public class MainActivity extends Activity {
 
         mainHandler.postDelayed(() -> hudBadge.animate().alpha(0f).setDuration(500).start(), 6000);
 
-        // Visible top-right "⚡ VagiiArk" Settings Pill Button (next to the clock, reachable with D-Pad UP!)
-        floatingSettingsBtn = new Button(this);
-        floatingSettingsBtn.setAllCaps(false);
-        floatingSettingsBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        floatingSettingsBtn.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        floatingSettingsBtn.setPadding(dp(14), dp(6), dp(14), dp(6));
-        floatingSettingsBtn.setFocusable(true);
-        floatingSettingsBtn.setFocusableInTouchMode(true);
-        updateFloatingSettingsBtnText();
-
-        final Runnable stylePillNormal = () -> {
-            GradientDrawable gd = new GradientDrawable();
-            gd.setColor(Color.parseColor("#B3161922"));
-            gd.setCornerRadius(dp(18));
-            gd.setStroke(dp(1), Color.parseColor("#40FFFFFF"));
-            floatingSettingsBtn.setBackground(gd);
-            floatingSettingsBtn.setTextColor(Color.WHITE);
-            floatingSettingsBtn.setAlpha(0.88f);
-        };
-        stylePillNormal.run();
-
-        floatingSettingsBtn.setOnFocusChangeListener((v, hasFocus) -> {
-            if (hasFocus) {
-                GradientDrawable gd = new GradientDrawable();
-                gd.setColor(Color.parseColor("#FF1744"));
-                gd.setCornerRadius(dp(18));
-                gd.setStroke(dp(2), Color.WHITE);
-                floatingSettingsBtn.setBackground(gd);
-                floatingSettingsBtn.setTextColor(Color.WHITE);
-                floatingSettingsBtn.setAlpha(1.0f);
-            } else {
-                stylePillNormal.run();
-            }
-        });
-        floatingSettingsBtn.setOnClickListener(v -> showQuickMenu());
-
-        // Pressing DOWN or LEFT from the top-right pill returns focus smoothly to YouTube WebView
-        floatingSettingsBtn.setOnKeyListener((v, keyCode, event) -> {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    if (webView != null) webView.requestFocus();
-                    return true;
-                }
-            }
-            return false;
-        });
-
-        FrameLayout.LayoutParams pillLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                dp(34),
-                Gravity.TOP | Gravity.END
-        );
-        // Positioned at top-right, left of the 00:00:00 clock overlay
-        pillLp.setMargins(0, dp(14), dp(185), 0);
-        rootLayout.addView(floatingSettingsBtn, pillLp);
-
         toastBanner = new TextView(this);
         toastBanner.setTextColor(Color.WHITE);
         toastBanner.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
@@ -543,13 +488,7 @@ public class MainActivity extends Activity {
         rootLayout.addView(toastBanner, toastLp);
     }
 
-    private void updateFloatingSettingsBtnText() {
-        if (floatingSettingsBtn == null) return;
-        floatingSettingsBtn.setText("⚡ VagiiArk  •  " + formatSpeed(playbackSpeed));
-    }
-
     private void updateHudBadge() {
-        updateFloatingSettingsBtnText();
         if (hudBadge == null) return;
         String speedText = formatSpeed(playbackSpeed);
         String text = "⚡ VagiiArk TV  •  AdBlock " + (adblockEnabled ? "ON" : "OFF")
@@ -789,6 +728,41 @@ public class MainActivity extends Activity {
         aspectBtn.setTag("toggle_aspect");
         if ("toggle_aspect".equals(focusTagToRestore)) firstFocusTarget = aspectBtn;
         quickMenuContainer.addView(aspectBtn);
+
+        String colorBadge = "VIVID FULL-RANGE (1080p RICH)";
+        String colorBg = "#193329";
+        if ("cinema".equals(colorBoostMode)) {
+            colorBadge = "ULTRA CINEMA (DEEP CONTRAST)";
+            colorBg = "#1E293B";
+        } else if ("off".equals(colorBoostMode)) {
+            colorBadge = "STANDARD (RAW)";
+            colorBg = "#1A1E29";
+        }
+
+        Button colorBtn = createMenuRowButton(
+                "🎨  1080p Color & Contrast Engine",
+                colorBadge,
+                colorBg,
+                v -> {
+                    if ("vivid".equals(colorBoostMode)) {
+                        colorBoostMode = "cinema";
+                    } else if ("cinema".equals(colorBoostMode)) {
+                        colorBoostMode = "off";
+                    } else {
+                        colorBoostMode = "vivid";
+                    }
+                    savePrefs();
+                    pushConfigToJs();
+                    String msg = "vivid".equals(colorBoostMode)
+                            ? "Color Engine: Vivid Full-Range (Rich 1080p)"
+                            : ("cinema".equals(colorBoostMode) ? "Color Engine: Ultra Cinema (Deep Contrast)" : "Color Engine: Standard");
+                    showTvToast(msg, "#00E676");
+                    showQuickMenu("toggle_color");
+                }
+        );
+        colorBtn.setTag("toggle_color");
+        if ("toggle_color".equals(focusTagToRestore)) firstFocusTarget = colorBtn;
+        quickMenuContainer.addView(colorBtn);
 
         // Section 3: SponsorBlock Categories (Cycles: AUTO-SKIP -> MANUAL (PRESS OK) -> OFF)
         addSectionHeader("SPONSORBLOCK CATEGORIES (Press OK to cycle: AUTO-SKIP • MANUAL • OFF)");

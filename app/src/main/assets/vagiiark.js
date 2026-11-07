@@ -27,10 +27,18 @@
                 return origIsTypeSupported(mimeType);
             };
         }
-        // Lock devicePixelRatio to 1.0 so YouTube doesn't rasterize 4K textures on a 1080p panel
-        if (window.devicePixelRatio && window.devicePixelRatio > 1.25) {
-            Object.defineProperty(window, 'devicePixelRatio', { get: function () { return 1.0; } });
-        }
+        // Spoof 1920x1080 screen dimensions to YouTube's ABR engine so it ALWAYS selects 1080p HD
+        // even though the Xiaomi MiTV-MSSP2 UI surface is 1280x720!
+        try {
+            Object.defineProperty(window, 'innerWidth', { get: function () { return 1920; }, configurable: true });
+            Object.defineProperty(window, 'innerHeight', { get: function () { return 1080; }, configurable: true });
+            if (window.screen) {
+                Object.defineProperty(window.screen, 'width', { get: function () { return 1920; }, configurable: true });
+                Object.defineProperty(window.screen, 'height', { get: function () { return 1080; }, configurable: true });
+                Object.defineProperty(window.screen, 'availWidth', { get: function () { return 1920; }, configurable: true });
+                Object.defineProperty(window.screen, 'availHeight', { get: function () { return 1080; }, configurable: true });
+            }
+        } catch (e) {}
     } catch (e) {}
 
     // Modes for SponsorBlock categories: 'auto' (Auto-Skip), 'manual' (Prompt to Skip with OK), 'off' (Do nothing)
@@ -39,6 +47,7 @@
         sponsorBlockEnabled: true,
         speed: 1.0,
         videoAspectMode: 'fit', // 'fit' (Original), 'fill' (Zoom to Fill 16:9 Screen), 'stretch' (Stretch 16:9)
+        colorBoostMode: 'vivid', // 'vivid' (Full-Range Rich Color), 'cinema' (Deep Contrast), 'off' (Standard)
         fastMode: true,
         categories: {
             sponsor: 'auto',
@@ -156,6 +165,17 @@
                 left: 0 !important;
                 top: 0 !important;
                 object-fit: fill !important;
+            }
+            ` : ''}
+            ${config.colorBoostMode === 'vivid' ? `
+            /* Expand Limited-Range YUV (16-235) to Full-Range (0-255) & restore BT.709 color saturation */
+            .html5-main-video, video {
+                filter: contrast(1.14) saturate(1.26) brightness(0.98) !important;
+            }
+            ` : config.colorBoostMode === 'cinema' ? `
+            /* Deep Cinema Contrast & Punchy Saturation */
+            .html5-main-video, video {
+                filter: contrast(1.22) saturate(1.38) brightness(0.96) !important;
             }
             ` : ''}
             ${config.fastMode ? `
@@ -525,11 +545,26 @@
     }
 
     // Use lightweight event delegation on <video> events instead of 250ms setInterval polling!
+    function forceHighQualityOnPlayer() {
+        try {
+            const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+            if (mp) {
+                if (typeof mp.setPlaybackQualityRange === 'function') {
+                    mp.setPlaybackQualityRange('hd1080', 'hd1080');
+                }
+                if (typeof mp.setPlaybackQuality === 'function') {
+                    mp.setPlaybackQuality('hd1080');
+                }
+            }
+        } catch (e) {}
+    }
+
     document.addEventListener('loadedmetadata', function (e) {
         const video = e.target;
         if (video && video.tagName === 'VIDEO') {
             video.removeAttribute('poster');
             enforceVideoSpeed(video);
+            forceHighQualityOnPlayer();
             const vId = extractVideoIdFromUrl();
             if (vId) onVideoDetected(vId, document.title || '');
         }
@@ -540,6 +575,7 @@
         if (video && video.tagName === 'VIDEO') {
             video.removeAttribute('poster');
             enforceVideoSpeed(video);
+            forceHighQualityOnPlayer();
         }
     }, true);
 
