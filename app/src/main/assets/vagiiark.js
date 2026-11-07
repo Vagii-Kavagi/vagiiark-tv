@@ -5,26 +5,52 @@
     const BRIDGE = window.VagiiBridge || null;
 
     // ---------------------------------------------------------------------------
-    // 0. FORCE HARDWARE H.264 / AVC1 + 1080p60 CAP ON MSTAR m5621 SO VIDEO & LIVE
-    //    STREAMS NEVER TRIGGER VP9/AV1 CPU FALLBACK OR 67% CPU THERMAL THROTTLING!
+    // 0. UNLOCK 1080p60 HARDWARE VP9 & H.264 ON XIAOMI MiTV-MSSP2 (MStar m5621)
+    //    Why max quality was stuck at 720p earlier:
+    //    1) JerryRigEverything & modern channels upload 1080p at 60fps (`1080p60`).
+    //       MStar's `OMX.MS.AVC.Decoder` (H.264) only supports 1080p30 (1,036,800 blocks/sec),
+    //       whereas `OMX.MS.VP9.Decoder` supports full 1080p60 (2,088,960 blocks/sec)!
+    //       Blocking VP9 hid all 1080p60 streams, leaving 720p60 as the max!
+    //    2) Xiaomi's UI surface is 1280x720 (`devicePixelRatio = 1`), so YouTube TV's
+    //       player hides resolutions > 720p unless `window.devicePixelRatio >= 1.5`!
     // ---------------------------------------------------------------------------
     try {
+        // Spoof devicePixelRatio = 1.5 (1280 * 1.5 = 1920x1080 physical pixels)
+        // This does NOT shift the 1280x720 CSS layout, and tells YouTube TV the panel is 1080p!
+        Object.defineProperty(window, 'devicePixelRatio', {
+            get: function () { return 1.5; },
+            configurable: true
+        });
+        if (window.screen) {
+            Object.defineProperty(window.screen, 'width', { get: function () { return 1920; }, configurable: true });
+            Object.defineProperty(window.screen, 'height', { get: function () { return 1080; }, configurable: true });
+            Object.defineProperty(window.screen, 'availWidth', { get: function () { return 1920; }, configurable: true });
+            Object.defineProperty(window.screen, 'availHeight', { get: function () { return 1080; }, configurable: true });
+        }
+
         if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
             const origIsTypeSupported = MediaSource.isTypeSupported.bind(MediaSource);
             MediaSource.isTypeSupported = function (mimeType) {
                 if (!mimeType || typeof mimeType !== 'string') return false;
                 const lower = mimeType.toLowerCase();
-                // Block AV1 and VP9/WebM on MStar WebView so YouTube serves H.264 (avc1)
-                // which decodes at 0% CPU on OMX.MS.AVC.Decoder (111 fps hardware VPU)
-                if (lower.indexOf('av01') !== -1 || lower.indexOf('vp9') !== -1 || lower.indexOf('vp09') !== -1 || lower.indexOf('webm') !== -1) {
+                // Only block AV1 (`av01`) which has no hardware decoder on MStar m5621.
+                // ALLOW both VP9 (`vp9`/`vp09`) AND H.264 (`avc1`) up to 1920x1080 @ 60fps!
+                if (lower.indexOf('av01') !== -1) {
                     return false;
                 }
-                // Cap resolution at 1080p (height <= 1080, width <= 1920)
+                // Cap resolution at 1080p (1920x1088 is the hardware max of OMX.MS.VP9.Decoder & OMX.MS.AVC.Decoder)
                 const hMatch = lower.match(/height=(\d+)/);
                 if (hMatch && parseInt(hMatch[1], 10) > 1088) return false;
                 const wMatch = lower.match(/width=(\d+)/);
                 if (wMatch && parseInt(wMatch[1], 10) > 1920) return false;
-                return origIsTypeSupported(mimeType);
+
+                // Strip high-frame-rate / dimensions query strings before passing to Chromium if needed
+                // so MStar's VP9/AVC decoder always claims 1080p60 support
+                const cleanMime = mimeType.split(';').filter(function (part) {
+                    const p = part.trim().toLowerCase();
+                    return !(p.startsWith('width=') || p.startsWith('height=') || p.startsWith('framerate='));
+                }).join('; ');
+                return origIsTypeSupported(cleanMime) || origIsTypeSupported(mimeType);
             };
         }
     } catch (e) {}
