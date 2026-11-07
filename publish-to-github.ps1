@@ -36,14 +36,14 @@ if ($pat) {
     }
 }
 
-Write-Host "==> Pushing main branch and v1.0.0 tag to GitHub..." -ForegroundColor Cyan
+Write-Host "==> Pushing main branch and latest tags to GitHub..." -ForegroundColor Cyan
 git add -A
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
     git commit -m "Update VagiiArk TV"
 }
 git push -u origin main
-git push -f origin v1.0.0
+git push -f origin --tags
 
-Write-Host "`nDone! Your code and release tag are live at: https://github.com/Vagii-Kavagi/vagiiark-tv" -ForegroundColor Green
+Write-Host "`nDone! Your code and release tags are live at: https://github.com/Vagii-Kavagi/vagiiark-tv" -ForegroundColor Green
 Write-Host "GitHub Actions will automatically build and attach app-release.apk to the v1.0.0 Release for in-app OTA updates." -ForegroundColor Green
