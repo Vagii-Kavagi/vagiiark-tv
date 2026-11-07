@@ -10,7 +10,6 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -51,8 +50,6 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -67,10 +64,10 @@ public class MainActivity extends Activity {
             "https://raw.githubusercontent.com/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/main/hotfix/vagiiark-patch.js";
 
     // SmartTV User-Agent that unlocks the full interactive 1080p/4K YouTube TV Leanback interface
-    // (Note: Do NOT include CrKey/Chromecast token, or youtube.com/tv shows the "Ready to cast" receiver screen instead of the full browse UI!)
+    // with rich translucent glass UI (instead of Tizen 6.5's legacy high-contrast solid black text boxes!)
     private static final String YT_TV_USER_AGENT =
-            "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.5) AppleWebKit/537.36 (KHTML, like Gecko) "
-                    + "SamsungBrowser/5.0 Chrome/138.0.7204.179 TV Safari/537.36";
+            "Mozilla/5.0 (Linux; Tizen 8.0; SmartTV) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    + "Chrome/138.0.7204.179 Safari/537.36 SmartTV/10.0";
 
     private static final String YT_TV_URL = "https://www.youtube.com/tv";
     private static final String PREFS_NAME = "vagiiark_prefs";
@@ -85,22 +82,22 @@ public class MainActivity extends Activity {
             "youtube.com/api/stats/ads",
             "youtube.com/pagead/",
             "youtube.com/ptracking",
-            "youtube.com/get_midroll_info",
-            "s.youtube.com/api/stats/qoe"
+            "youtube.com/get_midroll_info"
     };
 
     private static final double[] SPEED_PRESETS = new double[]{
             0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0
     };
 
+    // { categoryKey, displayLabel, hexColor, defaultMode }
     private static final String[][] SPONSOR_CATEGORIES = new String[][]{
-            {"sponsor", "Sponsor Segments", "#00D400"},
-            {"selfpromo", "Unpaid / Self Promotion", "#FFFF00"},
-            {"interaction", "Subscribe / Like Reminders", "#CC00FF"},
-            {"intro", "Intermission / Intro Animation", "#00FFFF"},
-            {"outro", "Endcards & Credits", "#0202ED"},
-            {"preview", "Preview / Recap", "#008FD6"},
-            {"music_offtopic", "Music: Non-Music Section", "#FF9900"}
+            {"sponsor", "Sponsor Segments", "#00D400", "auto"},
+            {"selfpromo", "Unpaid / Self Promotion", "#FFFF00", "auto"},
+            {"interaction", "Subscribe / Like Reminders", "#CC00FF", "auto"},
+            {"intro", "Intermission / Intro Animation", "#00FFFF", "manual"},
+            {"outro", "Endcards & Credits", "#0202ED", "manual"},
+            {"preview", "Preview / Recap", "#008FD6", "manual"},
+            {"music_offtopic", "Music: Non-Music Section", "#FF9900", "auto"}
     };
 
     private FrameLayout rootLayout;
@@ -125,7 +122,13 @@ public class MainActivity extends Activity {
     private String currentVideoId = "";
     private String currentVideoTitle = "";
     private String cachedInjectedJs = "";
-    private String hotfixStatus = "Up to date (v1.0.0)";
+    private String hotfixStatus = "Up to date (v1.1.0)";
+
+    // Manual SponsorBlock skip prompt state
+    private volatile boolean manualSkipPromptVisible = false;
+
+    // Visible top-right "⚡ VagiiArk" Settings Pill Button (reachable by D-pad UP or click)
+    private Button floatingSettingsBtn;
 
     private long okKeyDownTime = 0L;
     private boolean okLongPressTriggered = false;
@@ -162,7 +165,6 @@ public class MainActivity extends Activity {
         String startUrl = resolveStartUrl(getIntent());
         webView.loadUrl(startUrl);
 
-        // Background check for GitHub hotfixes on startup
         syncHotfixFromGitHub(false);
     }
 
@@ -256,12 +258,37 @@ public class MainActivity extends Activity {
         ed.apply();
     }
 
-    private boolean isCategoryEnabled(String cat) {
-        return prefs.getBoolean("sb_cat_" + cat, true);
+    // Modes: "auto" (Auto-Skip), "manual" (Manual Prompt: Press OK to Skip), "off" (Off)
+    private String getCategoryMode(String cat, String defaultMode) {
+        String modeKey = "sb_mode_" + cat;
+        if (prefs.contains(modeKey)) {
+            return prefs.getString(modeKey, defaultMode);
+        }
+        // Migrate any earlier boolean preference smoothly
+        String legacyKey = "sb_cat_" + cat;
+        if (prefs.contains(legacyKey)) {
+            try {
+                return prefs.getBoolean(legacyKey, true) ? defaultMode : "off";
+            } catch (Exception ignored) {
+            }
+        }
+        return defaultMode;
     }
 
-    private void setCategoryEnabled(String cat, boolean enabled) {
-        prefs.edit().putBoolean("sb_cat_" + cat, enabled).apply();
+    private void setCategoryMode(String cat, String mode) {
+        prefs.edit().putString("sb_mode_" + cat, mode).apply();
+    }
+
+    private String nextCategoryMode(String current) {
+        if ("auto".equals(current)) return "manual";
+        if ("manual".equals(current)) return "off";
+        return "auto";
+    }
+
+    private String formatCategoryModeBadge(String mode) {
+        if ("auto".equals(mode)) return "AUTO-SKIP";
+        if ("manual".equals(mode)) return "MANUAL (PRESS OK)";
+        return "OFF";
     }
 
     private void loadInjectedScript() {
@@ -274,7 +301,6 @@ public class MainActivity extends Activity {
             }
         } catch (Exception ignored) {
         }
-        // Append any hotfix patch downloaded from GitHub
         File patchFile = new File(getFilesDir(), "github_hotfix.js");
         if (patchFile.exists() && patchFile.length() > 0) {
             try (FileInputStream fis = new FileInputStream(patchFile);
@@ -388,7 +414,7 @@ public class MainActivity extends Activity {
 
             JSONObject cats = new JSONObject();
             for (String[] row : SPONSOR_CATEGORIES) {
-                cats.put(row[0], isCategoryEnabled(row[0]));
+                cats.put(row[0], getCategoryMode(row[0], row[3]));
             }
             obj.put("categories", cats);
 
@@ -426,8 +452,63 @@ public class MainActivity extends Activity {
         rootLayout.addView(hudBadge, hudLp);
         updateHudBadge();
 
-        // Auto-fade HUD badge after 6 seconds so screen stays clean
         mainHandler.postDelayed(() -> hudBadge.animate().alpha(0f).setDuration(500).start(), 6000);
+
+        // Visible top-right "⚡ VagiiArk" Settings Pill Button (next to the clock, reachable with D-Pad UP!)
+        floatingSettingsBtn = new Button(this);
+        floatingSettingsBtn.setAllCaps(false);
+        floatingSettingsBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        floatingSettingsBtn.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        floatingSettingsBtn.setPadding(dp(14), dp(6), dp(14), dp(6));
+        floatingSettingsBtn.setFocusable(true);
+        floatingSettingsBtn.setFocusableInTouchMode(true);
+        updateFloatingSettingsBtnText();
+
+        final Runnable stylePillNormal = () -> {
+            GradientDrawable gd = new GradientDrawable();
+            gd.setColor(Color.parseColor("#B3161922"));
+            gd.setCornerRadius(dp(18));
+            gd.setStroke(dp(1), Color.parseColor("#40FFFFFF"));
+            floatingSettingsBtn.setBackground(gd);
+            floatingSettingsBtn.setTextColor(Color.WHITE);
+            floatingSettingsBtn.setAlpha(0.88f);
+        };
+        stylePillNormal.run();
+
+        floatingSettingsBtn.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                GradientDrawable gd = new GradientDrawable();
+                gd.setColor(Color.parseColor("#FF1744"));
+                gd.setCornerRadius(dp(18));
+                gd.setStroke(dp(2), Color.WHITE);
+                floatingSettingsBtn.setBackground(gd);
+                floatingSettingsBtn.setTextColor(Color.WHITE);
+                floatingSettingsBtn.setAlpha(1.0f);
+            } else {
+                stylePillNormal.run();
+            }
+        });
+        floatingSettingsBtn.setOnClickListener(v -> showQuickMenu());
+
+        // Pressing DOWN or LEFT from the top-right pill returns focus smoothly to YouTube WebView
+        floatingSettingsBtn.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    if (webView != null) webView.requestFocus();
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        FrameLayout.LayoutParams pillLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(34),
+                Gravity.TOP | Gravity.END
+        );
+        // Positioned at top-right, left of the 00:00:00 clock overlay
+        pillLp.setMargins(0, dp(14), dp(185), 0);
+        rootLayout.addView(floatingSettingsBtn, pillLp);
 
         toastBanner = new TextView(this);
         toastBanner.setTextColor(Color.WHITE);
@@ -445,13 +526,19 @@ public class MainActivity extends Activity {
         rootLayout.addView(toastBanner, toastLp);
     }
 
+    private void updateFloatingSettingsBtnText() {
+        if (floatingSettingsBtn == null) return;
+        floatingSettingsBtn.setText("⚡ VagiiArk  •  " + formatSpeed(playbackSpeed));
+    }
+
     private void updateHudBadge() {
+        updateFloatingSettingsBtnText();
         if (hudBadge == null) return;
         String speedText = formatSpeed(playbackSpeed);
         String text = "⚡ VagiiArk TV  •  AdBlock " + (adblockEnabled ? "ON" : "OFF")
                 + "  •  SponsorBlock " + (sponsorBlockEnabled ? "ON" : "OFF")
                 + "  •  Speed " + speedText
-                + "  (Hold OK or press MENU for panel)";
+                + "  (Focus ⚡ VagiiArk top-right or Hold OK)";
         hudBadge.setText(text);
         hudBadge.setAlpha(1f);
         hudBadge.animate().cancel();
@@ -496,14 +583,13 @@ public class MainActivity extends Activity {
         ScrollView scrollView = new ScrollView(this);
         scrollView.setScrollbarFadingEnabled(false);
         FrameLayout.LayoutParams scrollLp = new FrameLayout.LayoutParams(
-                dp(460),
+                dp(480),
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.END
         );
 
         quickMenuContainer = new LinearLayout(this);
         quickMenuContainer.setOrientation(LinearLayout.VERTICAL);
-        // Top padding of 54dp clears the top-right network speed & clock overlay cleanly
         quickMenuContainer.setPadding(dp(24), dp(54), dp(24), dp(28));
         GradientDrawable panelBg = new GradientDrawable();
         panelBg.setColor(Color.parseColor("#F512151E"));
@@ -526,10 +612,13 @@ public class MainActivity extends Activity {
     }
 
     private void showQuickMenu() {
+        showQuickMenu(null);
+    }
+
+    private void showQuickMenu(final String focusTagToRestore) {
         if (quickMenuContainer == null) return;
         quickMenuContainer.removeAllViews();
 
-        // Title Header
         TextView title = new TextView(this);
         title.setText("⚡ VagiiArk TV Settings");
         title.setTextColor(Color.WHITE);
@@ -544,7 +633,6 @@ public class MainActivity extends Activity {
         subtitle.setPadding(0, dp(4), 0, dp(14));
         quickMenuContainer.addView(subtitle);
 
-        // Live Stats Card
         statusHeaderView = new TextView(this);
         statusHeaderView.setTextColor(Color.parseColor("#00E676"));
         statusHeaderView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
@@ -573,6 +661,7 @@ public class MainActivity extends Activity {
         View firstFocusTarget = null;
         for (int i = 0; i < SPEED_PRESETS.length; i++) {
             final double s = SPEED_PRESETS[i];
+            final String tag = "speed_" + s;
             boolean selected = Math.abs(playbackSpeed - s) < 0.01;
             Button chip = createChipButton(formatSpeed(s), selected, v -> {
                 playbackSpeed = s;
@@ -581,8 +670,9 @@ public class MainActivity extends Activity {
                     webView.evaluateJavascript("if(window.__vagiiArkSetSpeed){window.__vagiiArkSetSpeed(" + s + ");}", null);
                 }
                 updateHudBadge();
-                showQuickMenu();
+                showQuickMenu(tag);
             });
+            chip.setTag(tag);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(42), 1f);
             lp.setMargins(dp(3), dp(3), dp(3), dp(3));
             if (i < 5) {
@@ -590,7 +680,9 @@ public class MainActivity extends Activity {
             } else {
                 speedRow2.addView(chip, lp);
             }
-            if (selected) firstFocusTarget = chip;
+            if (tag.equals(focusTagToRestore) || (focusTagToRestore == null && selected)) {
+                firstFocusTarget = chip;
+            }
         }
         quickMenuContainer.addView(speedRow1);
         quickMenuContainer.addView(speedRow2);
@@ -601,63 +693,82 @@ public class MainActivity extends Activity {
         Button adblockBtn = createMenuRowButton(
                 "🛡️  Zero-Latency AdBlocker",
                 adblockEnabled ? "ENABLED" : "DISABLED",
-                adblockEnabled,
+                adblockEnabled ? "#1D3B2A" : "#1A1E29",
                 v -> {
                     adblockEnabled = !adblockEnabled;
                     savePrefs();
                     pushConfigToJs();
                     showTvToast("AdBlocker " + (adblockEnabled ? "Enabled" : "Disabled"), "#00E676");
-                    showQuickMenu();
+                    showQuickMenu("toggle_adblock");
                 }
         );
+        adblockBtn.setTag("toggle_adblock");
+        if ("toggle_adblock".equals(focusTagToRestore)) firstFocusTarget = adblockBtn;
         quickMenuContainer.addView(adblockBtn);
-        if (firstFocusTarget == null) firstFocusTarget = adblockBtn;
 
         Button sbToggleBtn = createMenuRowButton(
-                "⏭️  SponsorBlock Auto-Skip",
+                "⏭️  SponsorBlock Master Switch",
                 sponsorBlockEnabled ? "ENABLED" : "DISABLED",
-                sponsorBlockEnabled,
+                sponsorBlockEnabled ? "#1D2B3A" : "#1A1E29",
                 v -> {
                     sponsorBlockEnabled = !sponsorBlockEnabled;
                     savePrefs();
                     pushConfigToJs();
                     showTvToast("SponsorBlock " + (sponsorBlockEnabled ? "Enabled" : "Disabled"), "#00B0FF");
-                    showQuickMenu();
+                    showQuickMenu("toggle_sb");
                 }
         );
+        sbToggleBtn.setTag("toggle_sb");
+        if ("toggle_sb".equals(focusTagToRestore)) firstFocusTarget = sbToggleBtn;
         quickMenuContainer.addView(sbToggleBtn);
 
         Button fastModeBtn = createMenuRowButton(
-                "🚀  60fps MStar Turbo Mode (No Blur/Shadows)",
+                "🚀  60fps MStar Turbo (Disable Ambient Canvas)",
                 fastModeEnabled ? "ENABLED" : "DISABLED",
-                fastModeEnabled,
+                fastModeEnabled ? "#1D2B3A" : "#1A1E29",
                 v -> {
                     fastModeEnabled = !fastModeEnabled;
                     savePrefs();
                     pushConfigToJs();
                     showTvToast("60fps Turbo Mode " + (fastModeEnabled ? "Enabled" : "Disabled"), "#FFD600");
-                    showQuickMenu();
+                    showQuickMenu("toggle_fast");
                 }
         );
+        fastModeBtn.setTag("toggle_fast");
+        if ("toggle_fast".equals(focusTagToRestore)) firstFocusTarget = fastModeBtn;
         quickMenuContainer.addView(fastModeBtn);
 
-        // Section 3: SponsorBlock Categories
-        addSectionHeader("SPONSORBLOCK CATEGORIES");
+        // Section 3: SponsorBlock Categories (Cycles: AUTO-SKIP -> MANUAL (PRESS OK) -> OFF)
+        addSectionHeader("SPONSORBLOCK CATEGORIES (Press OK to cycle: AUTO-SKIP • MANUAL • OFF)");
         for (String[] cat : SPONSOR_CATEGORIES) {
             final String key = cat[0];
             final String label = cat[1];
             final String colorHex = cat[2];
-            boolean on = isCategoryEnabled(key);
+            final String defaultMode = cat[3];
+            final String currentMode = getCategoryMode(key, defaultMode);
+            final String tag = "sb_cat_" + key;
+
+            String rowBgColor = "#1A1E29";
+            if ("auto".equals(currentMode)) {
+                rowBgColor = "#193329"; // subtle green tint for Auto-Skip
+            } else if ("manual".equals(currentMode)) {
+                rowBgColor = "#1E293B"; // subtle blue tint for Manual Prompt
+            }
+
             Button catBtn = createMenuRowButton(
                     "●  " + label,
-                    on ? "SKIP" : "OFF",
-                    on,
+                    formatCategoryModeBadge(currentMode),
+                    rowBgColor,
                     v -> {
-                        setCategoryEnabled(key, !on);
+                        String next = nextCategoryMode(currentMode);
+                        setCategoryMode(key, next);
                         pushConfigToJs();
-                        showQuickMenu();
+                        showTvToast(label + " → " + formatCategoryModeBadge(next), colorHex);
+                        showQuickMenu(tag);
                     }
             );
+            catBtn.setTag(tag);
+            if (tag.equals(focusTagToRestore)) firstFocusTarget = catBtn;
             quickMenuContainer.addView(catBtn);
         }
 
@@ -667,7 +778,7 @@ public class MainActivity extends Activity {
         Button checkOtaBtn = createMenuRowButton(
                 "🔄  Check GitHub for App Update (OTA APK)",
                 "v" + getAppVersionName(),
-                true,
+                "#1D2B3A",
                 v -> checkGitHubReleaseUpdate()
         );
         quickMenuContainer.addView(checkOtaBtn);
@@ -675,7 +786,7 @@ public class MainActivity extends Activity {
         Button syncHotfixBtn = createMenuRowButton(
                 "⚡  Pull Latest AdBlock/SponsorBlock Hotfix from GitHub",
                 "LIVE PATCH",
-                true,
+                "#1D2B3A",
                 v -> syncHotfixFromGitHub(true)
         );
         quickMenuContainer.addView(syncHotfixBtn);
@@ -683,7 +794,7 @@ public class MainActivity extends Activity {
         Button reloadBtn = createMenuRowButton(
                 "🔁  Reload YouTube TV Engine",
                 "REFRESH",
-                false,
+                "#1A1E29",
                 v -> {
                     hideQuickMenu();
                     if (webView != null) webView.reload();
@@ -694,13 +805,13 @@ public class MainActivity extends Activity {
         Button closeBtn = createMenuRowButton(
                 "✕  Close Panel (or press BACK)",
                 "",
-                false,
+                "#1A1E29",
                 v -> hideQuickMenu()
         );
         quickMenuContainer.addView(closeBtn);
 
         quickMenuScrim.setVisibility(View.VISIBLE);
-        final View target = firstFocusTarget;
+        final View target = firstFocusTarget != null ? firstFocusTarget : adblockBtn;
         mainHandler.post(() -> {
             if (target != null) target.requestFocus();
         });
@@ -753,7 +864,7 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    private Button createMenuRowButton(String title, String badge, boolean enabledState, View.OnClickListener listener) {
+    private Button createMenuRowButton(String title, String badge, String bgHexColor, View.OnClickListener listener) {
         Button b = new Button(this);
         String fullText = TextUtils.isEmpty(badge) ? title : (title + "    [" + badge + "]");
         b.setText(fullText);
@@ -765,7 +876,7 @@ public class MainActivity extends Activity {
         b.setFocusable(true);
         b.setFocusableInTouchMode(true);
 
-        int baseColor = enabledState ? Color.parseColor("#1D2B3A") : Color.parseColor("#1A1E29");
+        int baseColor = Color.parseColor(bgHexColor);
         styleSelectableButton(b, baseColor, false);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -809,9 +920,9 @@ public class MainActivity extends Activity {
     private String getAppVersionName() {
         try {
             PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
-            return pi.versionName != null ? pi.versionName : "1.0.0";
+            return pi.versionName != null ? pi.versionName : "1.1.0";
         } catch (Exception e) {
-            return "1.0.0";
+            return "1.1.0";
         }
     }
 
@@ -826,7 +937,7 @@ public class MainActivity extends Activity {
                 conn = (HttpURLConnection) url.openConnection();
                 conn.setConnectTimeout(6000);
                 conn.setReadTimeout(6000);
-                conn.setRequestProperty("User-Agent", "VagiiArk-TV-Updater/1.0");
+                conn.setRequestProperty("User-Agent", "VagiiArk-TV-Updater/1.1");
                 int code = conn.getResponseCode();
                 if (code == 200) {
                     StringBuilder sb = new StringBuilder();
@@ -878,7 +989,7 @@ public class MainActivity extends Activity {
                 conn.setConnectTimeout(7000);
                 conn.setReadTimeout(7000);
                 conn.setRequestProperty("Accept", "application/vnd.github+json");
-                conn.setRequestProperty("User-Agent", "VagiiArk-TV-Updater/1.0");
+                conn.setRequestProperty("User-Agent", "VagiiArk-TV-Updater/1.1");
 
                 int code = conn.getResponseCode();
                 if (code != 200) {
@@ -939,7 +1050,7 @@ public class MainActivity extends Activity {
             conn.setInstanceFollowRedirects(true);
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(15000);
-            conn.setRequestProperty("User-Agent", "VagiiArk-TV-Updater/1.0");
+            conn.setRequestProperty("User-Agent", "VagiiArk-TV-Updater/1.1");
 
             File outFile = new File(getExternalCacheDir() != null ? getExternalCacheDir() : getCacheDir(),
                     "vagiiark-update-" + version + ".apk");
@@ -972,14 +1083,13 @@ public class MainActivity extends Activity {
     }
 
     // ---------------------------------------------------------------------------
-    // REMOTE KEY HANDLING (Menu / Info / Hold-OK / Color Buttons / Back)
+    // REMOTE KEY HANDLING (Manual Skip OK, Menu / Info / Hold-OK, Back)
     // ---------------------------------------------------------------------------
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         int keyCode = event.getKeyCode();
         int action = event.getAction();
 
-        // When Quick Menu is open, let Android native focus navigate the overlay buttons
         if (isQuickMenuOpen()) {
             if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE || keyCode == KeyEvent.KEYCODE_MENU) {
                 if (action == KeyEvent.ACTION_UP) {
@@ -990,8 +1100,17 @@ public class MainActivity extends Activity {
             return super.dispatchKeyEvent(event);
         }
 
-        // Direct remote shortcuts to open Quick Settings Panel:
-        // MENU, INFO, GUIDE, SETTINGS, CAPTIONS, PROG_BLUE, PROG_YELLOW
+        // If a Manual SponsorBlock Skip Prompt ("PRESS OK: Skip Intro/Outro...") is on screen,
+        // pressing OK / DPAD_CENTER immediately skips that segment!
+        if (manualSkipPromptVisible && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)) {
+            if (action == KeyEvent.ACTION_UP && !okLongPressTriggered && webView != null) {
+                manualSkipPromptVisible = false;
+                webView.evaluateJavascript("if(window.__vagiiArkTriggerManualSkip){window.__vagiiArkTriggerManualSkip();}", null);
+                return true;
+            }
+        }
+
+        // Direct remote shortcuts to open Quick Settings Panel
         if (keyCode == KeyEvent.KEYCODE_MENU
                 || keyCode == KeyEvent.KEYCODE_INFO
                 || keyCode == KeyEvent.KEYCODE_GUIDE
@@ -1005,7 +1124,6 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        // Fast speed stepping via Red / Green or Channel Down / Channel Up buttons if present
         if (keyCode == KeyEvent.KEYCODE_PROG_RED || keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
             if (action == KeyEvent.ACTION_DOWN && webView != null) {
                 webView.evaluateJavascript("if(window.__vagiiArkStepSpeed){window.__vagiiArkStepSpeed(-0.25);}", null);
@@ -1019,13 +1137,13 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        // Long-press OK / DPAD_CENTER (held >= 650ms) opens Quick Menu on minimal 6-button Xiaomi remotes!
+        // Long-press OK / DPAD_CENTER (held >= 600ms) opens Quick Menu
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
             if (action == KeyEvent.ACTION_DOWN) {
                 if (event.getRepeatCount() == 0) {
                     okKeyDownTime = System.currentTimeMillis();
                     okLongPressTriggered = false;
-                } else if (!okLongPressTriggered && (System.currentTimeMillis() - okKeyDownTime) >= 650) {
+                } else if (!okLongPressTriggered && (System.currentTimeMillis() - okKeyDownTime) >= 600) {
                     okLongPressTriggered = true;
                     showQuickMenu();
                     return true;
@@ -1038,7 +1156,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        // Route Back key to YouTube TV's internal SPA navigation (Escape), double-press on root to exit
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (action == KeyEvent.ACTION_UP && webView != null) {
                 String url = webView.getUrl() != null ? webView.getUrl() : "";
@@ -1071,7 +1188,7 @@ public class MainActivity extends Activity {
     }
 
     // ---------------------------------------------------------------------------
-    // JAVASCRIPT <-> NATIVE BRIDGE (SponsorBlock API + Stats + Speed Sync)
+    // JAVASCRIPT <-> NATIVE BRIDGE
     // ---------------------------------------------------------------------------
     public class VagiiJsBridge {
 
@@ -1099,6 +1216,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void onManualSkipPromptState(boolean visible, double endTime, String categoryName, int durationSec) {
+            manualSkipPromptVisible = visible;
+        }
+
+        @JavascriptInterface
         public void onSpeedChangedFromJs(double newSpeed) {
             playbackSpeed = newSpeed;
             savePrefs();
@@ -1109,6 +1231,7 @@ public class MainActivity extends Activity {
         public void onVideoChanged(String videoId, String title) {
             currentVideoId = videoId != null ? videoId : "";
             currentVideoTitle = title != null ? title : "";
+            manualSkipPromptVisible = false;
         }
 
         @JavascriptInterface
@@ -1133,7 +1256,7 @@ public class MainActivity extends Activity {
                     conn = (HttpURLConnection) url.openConnection();
                     conn.setConnectTimeout(5000);
                     conn.setReadTimeout(5000);
-                    conn.setRequestProperty("User-Agent", "VagiiArk-TV/1.0");
+                    conn.setRequestProperty("User-Agent", "VagiiArk-TV/1.1");
 
                     int code = conn.getResponseCode();
                     if (code == 200) {
