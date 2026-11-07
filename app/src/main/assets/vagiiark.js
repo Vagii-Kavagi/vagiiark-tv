@@ -4,6 +4,35 @@
 
     const BRIDGE = window.VagiiBridge || null;
 
+    // ---------------------------------------------------------------------------
+    // 0. FORCE HARDWARE H.264 / AVC1 + 1080p60 CAP ON MSTAR m5621 SO VIDEO & LIVE
+    //    STREAMS NEVER TRIGGER VP9/AV1 CPU FALLBACK OR 67% CPU THERMAL THROTTLING!
+    // ---------------------------------------------------------------------------
+    try {
+        if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
+            const origIsTypeSupported = MediaSource.isTypeSupported.bind(MediaSource);
+            MediaSource.isTypeSupported = function (mimeType) {
+                if (!mimeType || typeof mimeType !== 'string') return false;
+                const lower = mimeType.toLowerCase();
+                // Block AV1 and VP9/WebM on MStar WebView so YouTube serves H.264 (avc1)
+                // which decodes at 0% CPU on OMX.MS.AVC.Decoder (111 fps hardware VPU)
+                if (lower.indexOf('av01') !== -1 || lower.indexOf('vp9') !== -1 || lower.indexOf('vp09') !== -1 || lower.indexOf('webm') !== -1) {
+                    return false;
+                }
+                // Cap resolution at 1080p (height <= 1080, width <= 1920)
+                const hMatch = lower.match(/height=(\d+)/);
+                if (hMatch && parseInt(hMatch[1], 10) > 1088) return false;
+                const wMatch = lower.match(/width=(\d+)/);
+                if (wMatch && parseInt(wMatch[1], 10) > 1920) return false;
+                return origIsTypeSupported(mimeType);
+            };
+        }
+        // Lock devicePixelRatio to 1.0 so YouTube doesn't rasterize 4K textures on a 1080p panel
+        if (window.devicePixelRatio && window.devicePixelRatio > 1.25) {
+            Object.defineProperty(window, 'devicePixelRatio', { get: function () { return 1.0; } });
+        }
+    } catch (e) {}
+
     // Modes for SponsorBlock categories: 'auto' (Auto-Skip), 'manual' (Prompt to Skip with OK), 'off' (Do nothing)
     const config = {
         adblockEnabled: true,
@@ -39,7 +68,7 @@
 
     // ---------------------------------------------------------------------------
     // 1. CLEAN YouTube TV STYLING & AD-CONTAINER HIDING
-    //    (Preserves official YouTube TV translucent gradients, no black text boxes!)
+    //    (Zero GPU blur filters — uses crisp translucent RGBA so Mali-470 runs at 60fps!)
     // ---------------------------------------------------------------------------
     function applyCustomCss() {
         let styleEl = document.getElementById('vagiiark-fast-css');
@@ -65,10 +94,14 @@
                 width: 0 !important;
                 height: 0 !important;
             }
-            /* Hide the black-screen initial spinner/placeholder flash before first video frame */
+            /* Hide any WebView default video poster / play-icon flash */
+            video::-webkit-media-controls,
+            video::-webkit-media-controls-overlay-play-button,
+            video::-webkit-media-controls-start-playback-button,
+            .ytp-cued-thumbnail-overlay,
             .ytp-spinner,
-            .html5-video-loader,
-            .ytp-cued-thumbnail-overlay {
+            .html5-video-loader {
+                display: none !important;
                 opacity: 0 !important;
                 pointer-events: none !important;
             }
@@ -85,21 +118,25 @@
             ytlr-multi-markers-player-bar-renderer span {
                 background-color: transparent !important;
             }
-            /* Restore YouTube TV's soft top & bottom scrim gradients so white text is crisp without black boxes */
+            /* Restore YouTube TV's soft top scrim gradient so white text is crisp without black boxes */
             ytlr-player-header-renderer {
                 background: linear-gradient(180deg, rgba(0,0,0,0.68) 0%, rgba(0,0,0,0) 100%) !important;
             }
-            /* Restore frosted translucent glass look on Description, Join, Subscribe, Like/Dislike & Settings pills */
-            ytlr-button-renderer,
-            ytlr-toggle-button-renderer,
-            ytlr-Transport-controls-renderer ytlr-button,
-            .ytlr-button-renderer {
-                backdrop-filter: blur(8px) !important;
-                -webkit-backdrop-filter: blur(8px) !important;
+            /* Disable heavy ambient canvas and any backdrop-filter blur that chokes Mali-470 GPU */
+            #cinematics, .ytp-cinematics, canvas.ambient-canvas {
+                display: none !important;
+            }
+            *, *::before, *::after {
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
             }
             ${config.fastMode ? `
-            /* Disable only the heavy ambient background canvas without touching YouTube UI colors */
-            #cinematics, .ytp-cinematics, canvas.ambient-canvas {
+            /* Snappy 70ms D-pad tile focus transitions without laggy multi-layer repaints */
+            ytlr-tile-renderer, ytlr-button-renderer {
+                transition-duration: 70ms !important;
+            }
+            /* Disable animated video previews while scrolling the home grid so D-pad scrolling stays 60fps */
+            ytlr-tile-renderer ytlr-thumbnail-details + div video {
                 display: none !important;
             }
             ` : ''}
@@ -112,50 +149,13 @@
         document.addEventListener('DOMContentLoaded', applyCustomCss);
     }
 
-    // ---------------------------------------------------------------------------
-    // 2. IN-PLAYER "⚡ VagiiArk" BUTTON (Right next to CC & Settings ⚙️ in player bar!)
-    //    AND LEFT SIDEBAR "⚡ VagiiArk" NAV ITEM
-    // ---------------------------------------------------------------------------
-    function injectPlayerAndSidebarButtons() {
-        try {
-            // Inject a "⚡ VagiiArk Settings" button directly into the YouTube TV player controls row
-            // (right next to the ⚙️ Settings and CC buttons when player controls are open!)
-            const rightControls = document.querySelector(
-                'ytlr-transport-controls-renderer, .ytlr-transport-controls-renderer'
-            );
-            if (rightControls && !document.getElementById('vagiiark-inline-player-btn')) {
-                const btn = document.createElement('div');
-                btn.id = 'vagiiark-inline-player-btn';
-                btn.textContent = '⚡ VagiiArk (' + formatSpeedLabel(config.speed) + ')';
-                btn.style.cssText = [
-                    'display:inline-flex',
-                    'align-items:center',
-                    'justify-content:center',
-                    'background:rgba(255,23,68,0.88)',
-                    'color:#FFFFFF',
-                    'padding:8px 16px',
-                    'border-radius:20px',
-                    'font-family:Roboto,sans-serif',
-                    'font-size:15px',
-                    'font-weight:700',
-                    'margin-left:12px',
-                    'cursor:pointer'
-                ].join(';');
-                btn.addEventListener('click', () => {
-                    if (BRIDGE && BRIDGE.openQuickMenuFromJs) BRIDGE.openQuickMenuFromJs();
-                });
-                rightControls.appendChild(btn);
-            }
-        } catch (e) {}
-    }
-
     function formatSpeedLabel(s) {
         const n = Number(s) || 1.0;
         return n.toFixed(2).replace(/\.00$/, '.0').replace(/(\.\d)0$/, '$1') + 'x';
     }
 
     // ---------------------------------------------------------------------------
-    // 3. MANUAL SPONSORBLOCK SKIP PROMPT BANNER (When category is set to 'manual')
+    // 2. MANUAL SPONSORBLOCK SKIP PROMPT BANNER (When category is set to 'manual')
     // ---------------------------------------------------------------------------
     let activeManualSegment = null;
     let dismissedSegmentUuid = null;
@@ -188,8 +188,7 @@
                 'font-weight:600',
                 'display:none',
                 'align-items:center',
-                'gap:12px',
-                'box-shadow:0 6px 20px rgba(0,0,0,0.65)'
+                'gap:12px'
             ].join(';');
             document.body.appendChild(el);
         }
@@ -237,8 +236,7 @@
     };
 
     // ---------------------------------------------------------------------------
-    // 4. ZERO-FLASH INNERTUBE JSON AD-STRIPPER
-    //    (Leaves player heartbeat intact so YouTube never pauses with a black spinner!)
+    // 3. ZERO-OVERHEAD INNERTUBE JSON AD-STRIPPER
     // ---------------------------------------------------------------------------
     const AD_KEYS = [
         'adPlacements',
@@ -248,7 +246,7 @@
     ];
 
     function stripAdsFromObject(obj, depth) {
-        if (!config.adblockEnabled || !obj || typeof obj !== 'object' || depth > 6) return obj;
+        if (!config.adblockEnabled || !obj || typeof obj !== 'object' || depth > 5) return obj;
         let stripped = 0;
 
         for (let i = 0; i < AD_KEYS.length; i++) {
@@ -297,8 +295,6 @@
                     if (
                         k === 'playerResponse' ||
                         k === 'contents' ||
-                        k === 'twoColumnWatchNextResults' ||
-                        k === 'singleColumnBrowseResultsRenderer' ||
                         k === 'tvBrowseRenderer' ||
                         k === 'sectionListRenderer' ||
                         k === 'shelfRenderer' ||
@@ -326,11 +322,12 @@
     JSON.parse = function (text, reviver) {
         const parsed = origJsonParse.call(this, text, reviver);
         try {
-            if (parsed && typeof parsed === 'object') {
-                detectVideoIdFromPlayerPayload(parsed);
+            if (parsed && typeof parsed === 'object' && typeof text === 'string' && text.length > 120) {
+                if (text.indexOf('"videoDetails"') !== -1) {
+                    detectVideoIdFromPlayerPayload(parsed);
+                }
                 if (
                     config.adblockEnabled &&
-                    typeof text === 'string' &&
                     (text.indexOf('adPlacements') !== -1 ||
                      text.indexOf('playerAds') !== -1 ||
                      text.indexOf('adSlots') !== -1 ||
@@ -358,7 +355,7 @@
     }
 
     // ---------------------------------------------------------------------------
-    // 5. SPONSORBLOCK ENGINE (Supports 'auto', 'manual', and 'off' per category!)
+    // 4. EVENT-DRIVEN SPONSORBLOCK & SPEED ENGINE (Zero 250ms DOM Polling!)
     // ---------------------------------------------------------------------------
     let currentVideoId = null;
     let currentVideoTitle = '';
@@ -412,7 +409,6 @@
         try {
             if (BRIDGE && BRIDGE.fetchSponsorSegments) {
                 BRIDGE.fetchSponsorSegments(videoId, JSON.stringify(activeCats));
-                return;
             }
         } catch (e) {}
     }
@@ -444,29 +440,6 @@
         if (Math.abs(video.playbackRate - target) > 0.01) {
             video.playbackRate = target;
         }
-    }
-
-    function checkDomAdAndSkip(video) {
-        if (!config.adblockEnabled || !video) return false;
-        // Only trigger DOM ad skip when an actual ad overlay or ad-showing class is active on the player
-        const adShowing = document.querySelector('.html5-video-player.ad-showing, .html5-video-player.ad-interrupting');
-        if (adShowing) {
-            const skipBtn = document.querySelector(
-                '.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, [class*="skip-button"]'
-            );
-            if (skipBtn && typeof skipBtn.click === 'function') {
-                skipBtn.click();
-            }
-            if (isFinite(video.duration) && video.duration > 0 && video.duration < 180 && video.currentTime < video.duration - 0.2) {
-                video.currentTime = video.duration;
-            }
-            config.stats.adsBlocked++;
-            try {
-                if (BRIDGE && BRIDGE.onAdBlocked) BRIDGE.onAdBlocked(1);
-            } catch (e) {}
-            return true;
-        }
-        return false;
     }
 
     function checkSponsorBlockSegments(video) {
@@ -523,61 +496,56 @@
         }
     }
 
-    let boundVideo = null;
-    function attachToVideoElement() {
-        injectPlayerAndSidebarButtons();
-
-        const urlVid = extractVideoIdFromUrl();
-        if (urlVid && urlVid !== currentVideoId) {
-            onVideoDetected(urlVid, document.title || '');
+    // Use lightweight event delegation on <video> events instead of 250ms setInterval polling!
+    document.addEventListener('loadedmetadata', function (e) {
+        const video = e.target;
+        if (video && video.tagName === 'VIDEO') {
+            video.removeAttribute('poster');
+            enforceVideoSpeed(video);
+            const vId = extractVideoIdFromUrl();
+            if (vId) onVideoDetected(vId, document.title || '');
         }
+    }, true);
 
-        const video = document.querySelector('video');
-        if (!video) return;
-
-        // Preload metadata & auto-resume immediately so there is no startup lag stall
-        if (video.preload !== 'auto') {
-            video.preload = 'auto';
+    document.addEventListener('play', function (e) {
+        const video = e.target;
+        if (video && video.tagName === 'VIDEO') {
+            video.removeAttribute('poster');
+            enforceVideoSpeed(video);
         }
+    }, true);
 
-        if (video !== boundVideo) {
-            boundVideo = video;
-            video.addEventListener('ratechange', () => enforceVideoSpeed(video));
-            video.addEventListener('loadedmetadata', () => {
-                enforceVideoSpeed(video);
-                const vId = extractVideoIdFromUrl();
-                if (vId) onVideoDetected(vId, document.title || '');
-            });
-            video.addEventListener('canplay', () => {
-                enforceVideoSpeed(video);
-            });
-            video.addEventListener('play', () => enforceVideoSpeed(video));
-            video.addEventListener('timeupdate', () => {
-                if (!checkDomAdAndSkip(video)) {
-                    enforceVideoSpeed(video);
-                    checkSponsorBlockSegments(video);
-                }
-            });
-        } else {
-            if (!checkDomAdAndSkip(video)) {
-                enforceVideoSpeed(video);
-                checkSponsorBlockSegments(video);
-            }
+    document.addEventListener('ratechange', function (e) {
+        const video = e.target;
+        if (video && video.tagName === 'VIDEO') {
+            enforceVideoSpeed(video);
         }
-    }
+    }, true);
 
-    setInterval(attachToVideoElement, 250);
+    let lastTimeCheckMs = 0;
+    document.addEventListener('timeupdate', function (e) {
+        const nowMs = Date.now();
+        if (nowMs - lastTimeCheckMs < 350) return;
+        lastTimeCheckMs = nowMs;
+        const video = e.target;
+        if (video && video.tagName === 'VIDEO') {
+            checkSponsorBlockSegments(video);
+        }
+    }, true);
+
+    window.addEventListener('hashchange', function () {
+        const vId = extractVideoIdFromUrl();
+        if (vId) onVideoDetected(vId, document.title || '');
+    });
 
     // ---------------------------------------------------------------------------
-    // 6. LIVE API FOR NATIVE QUICK-SETTINGS OVERLAY PANEL
+    // 5. LIVE API FOR NATIVE QUICK-SETTINGS OVERLAY PANEL
     // ---------------------------------------------------------------------------
     window.__vagiiArkSetSpeed = function (speed) {
         const s = Math.max(0.25, Math.min(4.0, Number(speed) || 1.0));
         config.speed = s;
         const video = document.querySelector('video');
         if (video) video.playbackRate = s;
-        const speedSpan = document.getElementById('vagiiark-pill-speed');
-        if (speedSpan) speedSpan.textContent = formatSpeedLabel(s);
         if (BRIDGE && BRIDGE.showNativeToast) {
             BRIDGE.showNativeToast(`Playback Speed: ${formatSpeedLabel(s)}`, '#FFD600');
         }
@@ -599,8 +567,6 @@
         applyCustomCss();
         const video = document.querySelector('video');
         if (video) enforceVideoSpeed(video);
-        const speedSpan = document.getElementById('vagiiark-pill-speed');
-        if (speedSpan) speedSpan.textContent = formatSpeedLabel(config.speed);
         if (currentVideoId && config.sponsorBlockEnabled && BRIDGE && BRIDGE.fetchSponsorSegments) {
             BRIDGE.fetchSponsorSegments(currentVideoId, JSON.stringify(getActiveCategoriesList()));
         }

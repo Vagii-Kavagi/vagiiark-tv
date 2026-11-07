@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -224,7 +225,12 @@ public class MainActivity extends Activity {
                     "com.stremio.one",
                     "com.wbd.stream",
                     "com.apple.atve.androidtv.appletv",
-                    "com.dstvmobile.android"
+                    "com.dstvmobile.android",
+                    "org.localsend.localsend_app",
+                    "com.mixplorer.silver",
+                    "com.esaba.downloader",
+                    "island.paperworld.wallpaper",
+                    "io.github.udhaykumarbala.retro"
             };
             for (String pkg : heavyPackages) {
                 am.killBackgroundProcesses(pkg);
@@ -346,6 +352,13 @@ public class MainActivity extends Activity {
             @Override
             public void onPermissionRequest(PermissionRequest request) {
                 request.grant(request.getResources());
+            }
+
+            // Override Android WebView's default huge grey play-triangle-in-a-circle poster!
+            // Without this, Android WebView draws a play button icon for ~1s whenever a <video> starts!
+            @Override
+            public Bitmap getDefaultVideoPoster() {
+                return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
             }
         });
 
