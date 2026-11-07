@@ -8,6 +8,9 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -329,7 +332,7 @@ public class MainActivity extends Activity {
     private void setupWebView() {
         webView = new WebView(this);
         webView.setBackgroundColor(Color.BLACK);
-        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        applyHardwareColorEngine();
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
 
@@ -407,7 +410,37 @@ public class MainActivity extends Activity {
         webView.evaluateJavascript(cachedInjectedJs, null);
     }
 
+    // Native Android Hardware Layer Paint ColorMatrix:
+    // Expands MStar Limited-Range YUV (16-235) to Full-Range (0-255) & restores BT.709 saturation
+    // on the Android RenderNode WITHOUT using CSS `filter:` (which breaks WebView hardware video overlays!)
+    private void applyHardwareColorEngine() {
+        if (webView == null) return;
+        if ("off".equals(colorBoostMode)) {
+            webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+            return;
+        }
+        float saturation = "cinema".equals(colorBoostMode) ? 1.32f : 1.22f;
+        float contrast = "cinema".equals(colorBoostMode) ? 1.16f : 1.10f;
+        float translate = (-0.5f * contrast + 0.5f) * 255f - 4f;
+
+        ColorMatrix satMatrix = new ColorMatrix();
+        satMatrix.setSaturation(saturation);
+
+        ColorMatrix contrastMatrix = new ColorMatrix(new float[]{
+                contrast, 0, 0, 0, translate,
+                0, contrast, 0, 0, translate,
+                0, 0, contrast, 0, translate,
+                0, 0, 0, 1, 0
+        });
+        satMatrix.postConcat(contrastMatrix);
+
+        Paint layerPaint = new Paint();
+        layerPaint.setColorFilter(new ColorMatrixColorFilter(satMatrix));
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, layerPaint);
+    }
+
     private void pushConfigToJs() {
+        applyHardwareColorEngine();
         if (webView == null) return;
         try {
             String json = buildConfigJson().toString();

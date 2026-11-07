@@ -27,16 +27,6 @@
                 return origIsTypeSupported(mimeType);
             };
         }
-        // NOTE: Do NOT override window.innerWidth or window.innerHeight (that shifts the 1280x720
-        // WebView viewport off-center!). Instead, only spoof screen.width/height & devicePixelRatio=1.5
-        // so YouTube's quality selector unlocks 1080p (1280 * 1.5 = 1920) while the UI fits 1280x720!
-        try {
-            Object.defineProperty(window, 'devicePixelRatio', { get: function () { return 1.5; }, configurable: true });
-            if (window.screen) {
-                Object.defineProperty(window.screen, 'width', { get: function () { return 1920; }, configurable: true });
-                Object.defineProperty(window.screen, 'height', { get: function () { return 1080; }, configurable: true });
-            }
-        } catch (e) {}
     } catch (e) {}
 
     // Modes for SponsorBlock categories: 'auto' (Auto-Skip), 'manual' (Prompt to Skip with OK), 'off' (Do nothing)
@@ -159,18 +149,6 @@
             .html5-main-video, ytlr-player video, #player video {
                 transform: scaleX(1.34) !important;
                 transform-origin: center center !important;
-            }
-            ` : ''}
-            ${config.colorBoostMode === 'vivid' ? `
-            /* Expand Limited-Range YUV (16-235) to Full-Range (0-255) & restore BT.709 color saturation
-               Applied to the player container so the hardware <video> decoder never jumps to top-left! */
-            .html5-video-container, ytlr-player {
-                filter: contrast(1.14) saturate(1.26) brightness(0.98) !important;
-            }
-            ` : config.colorBoostMode === 'cinema' ? `
-            /* Deep Cinema Contrast & Punchy Saturation */
-            .html5-video-container, ytlr-player {
-                filter: contrast(1.22) saturate(1.38) brightness(0.96) !important;
             }
             ` : ''}
             ${config.fastMode ? `
