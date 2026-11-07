@@ -116,6 +116,7 @@ public class MainActivity extends Activity {
     private boolean adblockEnabled = true;
     private boolean sponsorBlockEnabled = true;
     private boolean fastModeEnabled = true;
+    private String videoAspectMode = "fit"; // "fit", "fill", "stretch"
     private double playbackSpeed = 1.0;
     private int adsBlockedCount = 0;
     private int segmentsSkippedCount = 0;
@@ -243,6 +244,7 @@ public class MainActivity extends Activity {
         adblockEnabled = prefs.getBoolean("adblock_enabled", true);
         sponsorBlockEnabled = prefs.getBoolean("sponsorblock_enabled", true);
         fastModeEnabled = prefs.getBoolean("fast_mode", true);
+        videoAspectMode = prefs.getString("video_aspect_mode", "fit");
         playbackSpeed = Double.longBitsToDouble(
                 prefs.getLong("playback_speed_bits", Double.doubleToLongBits(1.0))
         );
@@ -257,6 +259,7 @@ public class MainActivity extends Activity {
         ed.putBoolean("adblock_enabled", adblockEnabled);
         ed.putBoolean("sponsorblock_enabled", sponsorBlockEnabled);
         ed.putBoolean("fast_mode", fastModeEnabled);
+        ed.putString("video_aspect_mode", videoAspectMode);
         ed.putLong("playback_speed_bits", Double.doubleToLongBits(playbackSpeed));
         ed.putInt("ads_blocked_count", adsBlockedCount);
         ed.putInt("segments_skipped_count", segmentsSkippedCount);
@@ -423,6 +426,7 @@ public class MainActivity extends Activity {
             obj.put("adblockEnabled", adblockEnabled);
             obj.put("sponsorBlockEnabled", sponsorBlockEnabled);
             obj.put("fastMode", fastModeEnabled);
+            obj.put("videoAspectMode", videoAspectMode);
             obj.put("speed", playbackSpeed);
 
             JSONObject cats = new JSONObject();
@@ -750,6 +754,41 @@ public class MainActivity extends Activity {
         fastModeBtn.setTag("toggle_fast");
         if ("toggle_fast".equals(focusTagToRestore)) firstFocusTarget = fastModeBtn;
         quickMenuContainer.addView(fastModeBtn);
+
+        String aspectBadge = "ORIGINAL (FIT)";
+        String aspectBg = "#1A1E29";
+        if ("fill".equals(videoAspectMode)) {
+            aspectBadge = "FULLSCREEN ZOOM (NO SIDEBARS)";
+            aspectBg = "#193329";
+        } else if ("stretch".equals(videoAspectMode)) {
+            aspectBadge = "16:9 STRETCH";
+            aspectBg = "#1E293B";
+        }
+
+        Button aspectBtn = createMenuRowButton(
+                "📺  Video Screen Fit / Aspect Ratio",
+                aspectBadge,
+                aspectBg,
+                v -> {
+                    if ("fit".equals(videoAspectMode)) {
+                        videoAspectMode = "fill";
+                    } else if ("fill".equals(videoAspectMode)) {
+                        videoAspectMode = "stretch";
+                    } else {
+                        videoAspectMode = "fit";
+                    }
+                    savePrefs();
+                    pushConfigToJs();
+                    String msg = "fit".equals(videoAspectMode)
+                            ? "Screen Fit: Original Aspect Ratio"
+                            : ("fill".equals(videoAspectMode) ? "Screen Fit: Fullscreen Zoom (No Sidebars)" : "Screen Fit: 16:9 Stretch");
+                    showTvToast(msg, "#00E676");
+                    showQuickMenu("toggle_aspect");
+                }
+        );
+        aspectBtn.setTag("toggle_aspect");
+        if ("toggle_aspect".equals(focusTagToRestore)) firstFocusTarget = aspectBtn;
+        quickMenuContainer.addView(aspectBtn);
 
         // Section 3: SponsorBlock Categories (Cycles: AUTO-SKIP -> MANUAL (PRESS OK) -> OFF)
         addSectionHeader("SPONSORBLOCK CATEGORIES (Press OK to cycle: AUTO-SKIP • MANUAL • OFF)");

@@ -38,6 +38,7 @@
         adblockEnabled: true,
         sponsorBlockEnabled: true,
         speed: 1.0,
+        videoAspectMode: 'fit', // 'fit' (Original), 'fill' (Zoom to Fill 16:9 Screen), 'stretch' (Stretch 16:9)
         fastMode: true,
         categories: {
             sponsor: 'auto',
@@ -114,8 +115,16 @@
             ytlr-player-header-renderer,
             ytlr-player-header-renderer *,
             ytlr-progress-bar,
-            ytlr-progress-bar span,
-            ytlr-multi-markers-player-bar-renderer span {
+            ytlr-progress-bar *,
+            ytlr-multi-markers-player-bar-renderer,
+            ytlr-multi-markers-player-bar-renderer *,
+            ytlr-watch-metadata,
+            ytlr-watch-metadata *,
+            .ytlr-video-owner-renderer,
+            .ytlr-video-owner-renderer *,
+            span[style*="background"],
+            div[style*="background-color: rgb(0, 0, 0)"],
+            span[style*="background-color: rgb(0, 0, 0)"] {
                 background-color: transparent !important;
             }
             /* Restore YouTube TV's soft top scrim gradient so white text is crisp without black boxes */
@@ -130,6 +139,25 @@
                 backdrop-filter: none !important;
                 -webkit-backdrop-filter: none !important;
             }
+            ${config.videoAspectMode === 'fill' ? `
+            /* Fullscreen Zoom-to-Fill: expands 4:3 / 1.5:1 music videos to fill the 16:9 TV screen with zero black sidebars */
+            .html5-main-video, video {
+                width: 100vw !important;
+                height: 100vh !important;
+                left: 0 !important;
+                top: 0 !important;
+                object-fit: cover !important;
+            }
+            ` : config.videoAspectMode === 'stretch' ? `
+            /* Fullscreen 16:9 Stretch: stretches video edge-to-edge without cropping */
+            .html5-main-video, video {
+                width: 100vw !important;
+                height: 100vh !important;
+                left: 0 !important;
+                top: 0 !important;
+                object-fit: fill !important;
+            }
+            ` : ''}
             ${config.fastMode ? `
             /* Snappy 70ms D-pad tile focus transitions without laggy multi-layer repaints */
             ytlr-tile-renderer, ytlr-button-renderer {
