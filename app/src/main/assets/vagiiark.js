@@ -81,10 +81,18 @@
                 const cleanMime = mimeType.split(';').filter(function (part) {
                     const p = part.trim().toLowerCase();
                     return !(p.startsWith('width=') || p.startsWith('height=') || p.startsWith('framerate='));
-                }).join('; ');
+                }).join('; ').replace(/avc1\.64002a/gi, 'avc1.640028');
                 return origIsTypeSupported(cleanMime) || origIsTypeSupported(mimeType);
             };
         }
+
+        // Persist 1080p as the default preferred quality in YouTube TV localStorage
+        const nowTs = Date.now();
+        localStorage.setItem('yt-player-quality', origJsonStringify({
+            data: origJsonStringify({ quality: 1080, previousQuality: 1080 }),
+            expiration: nowTs + 31536000000,
+            creation: nowTs
+        }));
     } catch (e) {}
 
     // Modes for SponsorBlock categories: 'auto' (Auto-Skip), 'manual' (Prompt to Skip with OK), 'off' (Do nothing)
@@ -576,7 +584,8 @@
     }
 
     // Use lightweight event delegation on <video> events instead of 250ms setInterval polling!
-    function forceHighQualityOnPlayer() {
+    let lastQualityForcedVideoId = null;
+    function forceHighQualityOnPlayer(vId) {
         try {
             const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
             if (mp) {
@@ -586,6 +595,7 @@
                 if (typeof mp.setPlaybackQuality === 'function') {
                     mp.setPlaybackQuality('hd1080');
                 }
+                if (vId) lastQualityForcedVideoId = vId;
             }
         } catch (e) {}
     }
@@ -595,8 +605,8 @@
         if (video && video.tagName === 'VIDEO') {
             video.removeAttribute('poster');
             enforceVideoSpeed(video);
-            forceHighQualityOnPlayer();
-            const vId = extractVideoIdFromUrl();
+            const vId = extractVideoIdFromUrl() || currentVideoId;
+            forceHighQualityOnPlayer(vId);
             if (vId) onVideoDetected(vId, document.title || '');
         }
     }, true);
@@ -606,7 +616,10 @@
         if (video && video.tagName === 'VIDEO') {
             video.removeAttribute('poster');
             enforceVideoSpeed(video);
-            forceHighQualityOnPlayer();
+            const vId = extractVideoIdFromUrl() || currentVideoId;
+            if (vId && vId !== lastQualityForcedVideoId) {
+                forceHighQualityOnPlayer(vId);
+            }
         }
     }, true);
 

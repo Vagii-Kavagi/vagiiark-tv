@@ -4,5 +4,5 @@
  * or UI tweaks in-app without requiring an APK reinstall!
  */
 (function () {
-    window.__vagiiArkHotfixVersion = "1.2.0-live";
+    window.__vagiiArkHotfixVersion = "1.6.0-live";
 })();
