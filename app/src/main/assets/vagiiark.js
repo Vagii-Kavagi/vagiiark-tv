@@ -5,20 +5,36 @@
     const BRIDGE = window.VagiiBridge || null;
 
     // ---------------------------------------------------------------------------
-    // 0. UNLOCK 1080p60 HARDWARE VP9 & H.264 ON XIAOMI MiTV-MSSP2 (MStar m5621)
-    //    Why max quality was stuck at 720p earlier:
-    //    1) JerryRigEverything & modern channels upload 1080p at 60fps (`1080p60`).
-    //       MStar's `OMX.MS.AVC.Decoder` (H.264) only supports 1080p30 (1,036,800 blocks/sec),
-    //       whereas `OMX.MS.VP9.Decoder` supports full 1080p60 (2,088,960 blocks/sec)!
-    //       Blocking VP9 hid all 1080p60 streams, leaving 720p60 as the max!
-    //    2) Xiaomi's UI surface is 1280x720 (`devicePixelRatio = 1`), so YouTube TV's
-    //       player hides resolutions > 720p unless `window.devicePixelRatio >= 1.5`!
+    // 0. UNLOCK 1080p60 & 1080p PREMIUM ON XIAOMI MiTV-MSSP2 (1280x720 UI surface)
+    //    Why YouTube TV showed "Auto • 720p (Max 720p)":
+    //    1) YouTube TV reads `document.documentElement.clientWidth` / `window.innerWidth`
+    //       and sends `clientScreen.width` & `clientScreen.height` in `/youtubei/v1/player`!
+    //       With `webView.setInitialScale(67)` + `<meta name="viewport" content="width=1920, height=1080">`,
+    //       Android WebView renders a true 1920x1080 viewport scaled 66.67% to fit 1280x720 edge-to-edge!
+    //    2) We also intercept `/youtubei/v1/player` POST bodies & force `width: 1920, height: 1080`.
     // ---------------------------------------------------------------------------
+    function ensure1080pViewportMeta() {
+        try {
+            const head = document.head || document.documentElement;
+            if (!head) return;
+            let meta = document.querySelector('meta[name="viewport"]');
+            if (!meta) {
+                meta = document.createElement('meta');
+                meta.name = 'viewport';
+                head.appendChild(meta);
+            }
+            const desired = 'width=1920, height=1080, initial-scale=0.6666667, minimum-scale=0.6666667, maximum-scale=0.6666667, user-scalable=no';
+            if (meta.getAttribute('content') !== desired) {
+                meta.setAttribute('content', desired);
+            }
+        } catch (e) {}
+    }
+    ensure1080pViewportMeta();
+    document.addEventListener('DOMContentLoaded', ensure1080pViewportMeta);
+
     try {
-        // Spoof devicePixelRatio = 1.5 (1280 * 1.5 = 1920x1080 physical pixels)
-        // This does NOT shift the 1280x720 CSS layout, and tells YouTube TV the panel is 1080p!
         Object.defineProperty(window, 'devicePixelRatio', {
-            get: function () { return 1.5; },
+            get: function () { return 1.0; },
             configurable: true
         });
         if (window.screen) {
@@ -28,24 +44,40 @@
             Object.defineProperty(window.screen, 'availHeight', { get: function () { return 1080; }, configurable: true });
         }
 
+        // Hook JSON.stringify so any InnerTube request payload with clientScreen / playerWidth reports 1920x1080
+        const origJsonStringify = JSON.stringify;
+        JSON.stringify = function (val, replacer, space) {
+            try {
+                if (val && typeof val === 'object') {
+                    if (val.context && val.context.client) {
+                        val.context.client.screenWidthPoints = 1920;
+                        val.context.client.screenHeightPoints = 1080;
+                        val.context.client.screenPixelDensity = 1;
+                        val.context.client.windowWidthPoints = 1920;
+                        val.context.client.windowHeightPoints = 1080;
+                    }
+                    if (val.playbackContext && val.playbackContext.contentPlaybackContext) {
+                        val.playbackContext.contentPlaybackContext.playerWidthPixels = 1920;
+                        val.playbackContext.contentPlaybackContext.playerHeightPixels = 1080;
+                    }
+                }
+            } catch (e) {}
+            return origJsonStringify.call(this, val, replacer, space);
+        };
+
         if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
             const origIsTypeSupported = MediaSource.isTypeSupported.bind(MediaSource);
             MediaSource.isTypeSupported = function (mimeType) {
                 if (!mimeType || typeof mimeType !== 'string') return false;
                 const lower = mimeType.toLowerCase();
-                // Only block AV1 (`av01`) which has no hardware decoder on MStar m5621.
-                // ALLOW both VP9 (`vp9`/`vp09`) AND H.264 (`avc1`) up to 1920x1080 @ 60fps!
                 if (lower.indexOf('av01') !== -1) {
                     return false;
                 }
-                // Cap resolution at 1080p (1920x1088 is the hardware max of OMX.MS.VP9.Decoder & OMX.MS.AVC.Decoder)
                 const hMatch = lower.match(/height=(\d+)/);
                 if (hMatch && parseInt(hMatch[1], 10) > 1088) return false;
                 const wMatch = lower.match(/width=(\d+)/);
                 if (wMatch && parseInt(wMatch[1], 10) > 1920) return false;
 
-                // Strip high-frame-rate / dimensions query strings before passing to Chromium if needed
-                // so MStar's VP9/AVC decoder always claims 1080p60 support
                 const cleanMime = mimeType.split(';').filter(function (part) {
                     const p = part.trim().toLowerCase();
                     return !(p.startsWith('width=') || p.startsWith('height=') || p.startsWith('framerate='));

@@ -335,6 +335,11 @@ public class MainActivity extends Activity {
         applyHardwareColorEngine();
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
+        // Set initial scale to 100% (1:1 CSS pixels to 1920x1080 wide viewport!)
+        // On the Xiaomi MiTV-MSSP2 (1280x720 physical panel, 1.33125 density), setInitialScale(100)
+        // makes window.innerWidth = 1920 & window.innerHeight = 1080 AND scales the 1920x1080 canvas
+        // down to fit the 1280x720 display edge-to-edge so YouTube TV sees a true 1080p TV!
+        webView.setInitialScale(67);
 
         WebSettings ws = webView.getSettings();
         ws.setJavaScriptEnabled(true);
