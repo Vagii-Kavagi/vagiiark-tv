@@ -49,9 +49,12 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -104,14 +107,17 @@ public class MainActivity extends Activity {
     private FrameLayout quickMenuScrim;
     private LinearLayout quickMenuContainer;
     private TextView toastBanner;
-    private TextView statusHeaderView;
+    private TextView statsBadgeCard;
 
     private SharedPreferences prefs;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService ioExecutor = Executors.newCachedThreadPool();
 
     private boolean adblockEnabled = true;
+    private boolean blockPromoPopups = true;
     private boolean sponsorBlockEnabled = true;
+    private boolean showSkipNotice = true;
+    private String preferredQuality = "1080"; // "1080", "720", "auto"
     private double playbackSpeed = 1.0;
     private String videoAspectMode = "fit"; // "fit" (Default 1:1), "fill", "stretch"
     private boolean fastMode = true;
@@ -123,6 +129,16 @@ public class MainActivity extends Activity {
     private String injectedScriptContent = "";
     private long okKeyDownTime = 0;
     private boolean okLongPressTriggered = false;
+
+    // Direct UI references for in-place state updating (ZERO focus loss!)
+    private ToggleRowView adblockRow;
+    private ToggleRowView promoPopupsRow;
+    private ToggleRowView sponsorMasterRow;
+    private ToggleRowView skipNoticeRow;
+    private final Map<String, CategoryModeRowView> categoryRows = new HashMap<>();
+    private final List<Button> speedButtons = new ArrayList<>();
+    private final List<Button> aspectButtons = new ArrayList<>();
+    private final List<Button> qualityButtons = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -228,7 +244,10 @@ public class MainActivity extends Activity {
 
     private void loadPrefs() {
         adblockEnabled = prefs.getBoolean("adblock_enabled", true);
+        blockPromoPopups = prefs.getBoolean("block_promo_popups", true);
         sponsorBlockEnabled = prefs.getBoolean("sponsorblock_enabled", true);
+        showSkipNotice = prefs.getBoolean("show_skip_notice", true);
+        preferredQuality = prefs.getString("preferred_quality", "1080");
         playbackSpeed = (double) prefs.getFloat("playback_speed", 1.0f);
         videoAspectMode = prefs.getString("video_aspect_mode", "fit");
         fastMode = prefs.getBoolean("fast_mode", true);
@@ -265,7 +284,7 @@ public class MainActivity extends Activity {
 
     private String formatCategoryModeBadge(String mode) {
         if ("auto".equals(mode)) return "AUTO-SKIP";
-        if ("manual".equals(mode)) return "MANUAL (PRESS OK)";
+        if ("manual".equals(mode)) return "MANUAL PROMPT";
         return "OFF";
     }
 
@@ -399,7 +418,10 @@ public class MainActivity extends Activity {
         JSONObject obj = new JSONObject();
         try {
             obj.put("adblockEnabled", adblockEnabled);
+            obj.put("blockPromoPopups", blockPromoPopups);
             obj.put("sponsorBlockEnabled", sponsorBlockEnabled);
+            obj.put("showSkipNotice", showSkipNotice);
+            obj.put("preferredQuality", preferredQuality);
             obj.put("speed", playbackSpeed);
             obj.put("videoAspectMode", videoAspectMode);
             obj.put("fastMode", fastMode);
@@ -425,6 +447,7 @@ public class MainActivity extends Activity {
     private void recordAdBlocked() {
         adsBlockedCount++;
         prefs.edit().putInt("stat_ads_blocked", adsBlockedCount).apply();
+        mainHandler.post(this::updateStatsBadge);
     }
 
     private void setupToastBanner() {
@@ -432,7 +455,7 @@ public class MainActivity extends Activity {
         toastBanner.setTextColor(Color.WHITE);
         toastBanner.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         toastBanner.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        toastBanner.setPadding(dp(18), dp(12), dp(18), dp(12));
+        toastBanner.setPadding(dp(20), dp(12), dp(20), dp(12));
         toastBanner.setAlpha(0f);
 
         FrameLayout.LayoutParams toastLp = new FrameLayout.LayoutParams(
@@ -453,15 +476,15 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
             GradientDrawable bg = new GradientDrawable();
-            bg.setColor(Color.parseColor("#EB10131A"));
-            bg.setCornerRadius(dp(14));
+            bg.setColor(Color.parseColor("#E60B0E18"));
+            bg.setCornerRadius(dp(16));
             bg.setStroke(dp(2), accent);
             toastBanner.setBackground(bg);
             toastBanner.setText(message);
             toastBanner.animate().cancel();
             toastBanner.setAlpha(1f);
             mainHandler.removeCallbacks(hideToastRunnable);
-            mainHandler.postDelayed(hideToastRunnable, 2700);
+            mainHandler.postDelayed(hideToastRunnable, 2800);
         });
     }
 
@@ -472,17 +495,17 @@ public class MainActivity extends Activity {
     };
 
     // ---------------------------------------------------------------------------
-    // VAGIIARK TV CUSTOM IN-APP SETTINGS MENU OVERLAY (D-Pad Friendly)
+    // STYLISH, MODERN IN-APP SETTINGS MENU (Glass UI + Zero Focus-Loss State Updates!)
     // ---------------------------------------------------------------------------
     private void setupQuickMenuOverlay() {
         quickMenuScrim = new FrameLayout(this);
-        quickMenuScrim.setBackgroundColor(Color.parseColor("#B805070B"));
+        quickMenuScrim.setBackgroundColor(Color.parseColor("#C804070D"));
         quickMenuScrim.setVisibility(View.GONE);
 
         ScrollView scrollView = new ScrollView(this);
         scrollView.setScrollbarFadingEnabled(false);
         FrameLayout.LayoutParams scrollLp = new FrameLayout.LayoutParams(
-                dp(480),
+                dp(520),
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.END
         );
@@ -490,10 +513,12 @@ public class MainActivity extends Activity {
 
         quickMenuContainer = new LinearLayout(this);
         quickMenuContainer.setOrientation(LinearLayout.VERTICAL);
-        quickMenuContainer.setPadding(dp(24), dp(40), dp(24), dp(28));
+        quickMenuContainer.setPadding(dp(28), dp(40), dp(28), dp(36));
+
+        // Modern Frosted Glass Dark Card with electric cyan border accent
         GradientDrawable panelBg = new GradientDrawable();
-        panelBg.setColor(Color.parseColor("#F512151E"));
-        panelBg.setStroke(dp(1), Color.parseColor("#33FFFFFF"));
+        panelBg.setColor(Color.parseColor("#F20B0F19"));
+        panelBg.setStroke(dp(1), Color.parseColor("#29487D"));
         quickMenuContainer.setBackground(panelBg);
 
         scrollView.addView(quickMenuContainer, new ViewGroup.LayoutParams(
@@ -505,6 +530,8 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
+
+        buildMenuViewsOnce();
     }
 
     public boolean isQuickMenuOpen() {
@@ -513,348 +540,531 @@ public class MainActivity extends Activity {
 
     public void showQuickMenu() {
         if (quickMenuScrim == null) return;
-        rebuildQuickMenuContent();
+        updateAllMenuStateViews();
         quickMenuScrim.setVisibility(View.VISIBLE);
         quickMenuScrim.setAlpha(0f);
-        quickMenuScrim.animate().alpha(1f).setDuration(180).start();
+        quickMenuScrim.animate().alpha(1f).setDuration(160).start();
         mainHandler.postDelayed(() -> {
-            if (quickMenuContainer != null) {
-                View first = quickMenuContainer.findFocus();
-                if (first == null) {
-                    for (int i = 0; i < quickMenuContainer.getChildCount(); i++) {
-                        View child = quickMenuContainer.getChildAt(i);
-                        if (child.isFocusable()) {
-                            child.requestFocus();
-                            break;
-                        }
-                    }
-                }
+            if (adblockRow != null) {
+                adblockRow.requestFocus();
             }
-        }, 80);
+        }, 60);
     }
 
     public void hideQuickMenu() {
         if (quickMenuScrim == null || quickMenuScrim.getVisibility() != View.VISIBLE) return;
-        quickMenuScrim.animate().alpha(0f).setDuration(150).withEndAction(() -> {
+        quickMenuScrim.animate().alpha(0f).setDuration(140).withEndAction(() -> {
             quickMenuScrim.setVisibility(View.GONE);
             if (webView != null) webView.requestFocus();
         }).start();
     }
 
-    private void rebuildQuickMenuContent() {
-        if (quickMenuContainer == null) return;
+    private void buildMenuViewsOnce() {
         quickMenuContainer.removeAllViews();
+        categoryRows.clear();
+        speedButtons.clear();
+        aspectButtons.clear();
+        qualityButtons.clear();
 
-        // 1. Header with App Title & Close instruction
+        // 1. Top Header with Glowing Title & Version Pill
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText("VagiiArk TV Settings");
+        title.setText("⚡ VAGIIARK TV");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
         title.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView closeHint = new TextView(this);
-        closeHint.setText("Back to Close");
-        closeHint.setTextColor(Color.parseColor("#88FFFFFF"));
-        closeHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        header.addView(closeHint);
+        TextView verBadge = new TextView(this);
+        verBadge.setText("v1.7.1");
+        verBadge.setTextColor(Color.parseColor("#00E5FF"));
+        verBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        verBadge.setTypeface(Typeface.create("sans-serif-bold", Typeface.BOLD));
+        verBadge.setPadding(dp(10), dp(4), dp(10), dp(4));
+        GradientDrawable vBg = new GradientDrawable();
+        vBg.setColor(Color.parseColor("#182A4A"));
+        vBg.setCornerRadius(dp(12));
+        verBadge.setBackground(vBg);
+        header.addView(verBadge);
 
         quickMenuContainer.addView(header);
 
-        // 2. Status & Metrics Header
-        statusHeaderView = new TextView(this);
-        statusHeaderView.setTextColor(Color.parseColor("#9AA4B2"));
-        statusHeaderView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        statusHeaderView.setPadding(0, dp(6), 0, dp(14));
-        updateStatusHeaderText();
-        quickMenuContainer.addView(statusHeaderView);
+        // 2. Metrics & Shield Stats Card
+        statsBadgeCard = new TextView(this);
+        statsBadgeCard.setTextColor(Color.parseColor("#A8B8D0"));
+        statsBadgeCard.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        statsBadgeCard.setPadding(dp(14), dp(8), dp(14), dp(8));
+        GradientDrawable statsBg = new GradientDrawable();
+        statsBg.setColor(Color.parseColor("#131926"));
+        statsBg.setCornerRadius(dp(10));
+        statsBg.setStroke(dp(1), Color.parseColor("#1E2D48"));
+        statsBadgeCard.setBackground(statsBg);
 
-        // 3. Section: AdBlocker
-        addSectionHeader("AD BLOCKER");
-        addToggleRow(
-                "Block YouTube Ads",
-                adblockEnabled ? "ACTIVE (0 Ads)" : "DISABLED",
-                adblockEnabled,
-                () -> {
-                    adblockEnabled = !adblockEnabled;
-                    prefs.edit().putBoolean("adblock_enabled", adblockEnabled).apply();
-                    pushConfigToJs();
-                    rebuildQuickMenuContent();
-                    showTvToast(adblockEnabled ? "AdBlock enabled!" : "AdBlock disabled", "#00E676");
-                }
-        );
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sLp.setMargins(0, dp(12), 0, dp(14));
+        quickMenuContainer.addView(statsBadgeCard, sLp);
 
-        // 4. Section: SponsorBlock Master & Per-Category Settings
-        addSectionHeader("SPONSORBLOCK CONTROLS");
-        addToggleRow(
-                "SponsorBlock Master",
-                sponsorBlockEnabled ? "ENABLED" : "OFF",
-                sponsorBlockEnabled,
-                () -> {
-                    sponsorBlockEnabled = !sponsorBlockEnabled;
-                    prefs.edit().putBoolean("sponsorblock_enabled", sponsorBlockEnabled).apply();
-                    pushConfigToJs();
-                    rebuildQuickMenuContent();
-                    showTvToast(sponsorBlockEnabled ? "SponsorBlock enabled!" : "SponsorBlock off", "#00E676");
-                }
-        );
+        // 3. Section: SHIELD & PRIVACY
+        addSectionHeader("🛡 AD & CONTENT SHIELD");
+        adblockRow = new ToggleRowView(this, "Block Video Ads", adblockEnabled, (row) -> {
+            adblockEnabled = !adblockEnabled;
+            prefs.edit().putBoolean("adblock_enabled", adblockEnabled).apply();
+            pushConfigToJs();
+            row.setChecked(adblockEnabled, adblockEnabled ? "ACTIVE (" + adsBlockedCount + " Ads)" : "DISABLED");
+            showTvToast(adblockEnabled ? "AdBlock enabled!" : "AdBlock disabled", "#00E676");
+        });
+        quickMenuContainer.addView(adblockRow);
 
-        if (sponsorBlockEnabled) {
-            TextView catSub = new TextView(this);
-            catSub.setText("Click any category below to switch: Auto-Skip | Manual Prompt | Off");
-            catSub.setTextColor(Color.parseColor("#78909C"));
-            catSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-            catSub.setPadding(0, dp(2), 0, dp(8));
-            quickMenuContainer.addView(catSub);
+        promoPopupsRow = new ToggleRowView(this, "Block Promo Popups & Surveys", blockPromoPopups, (row) -> {
+            blockPromoPopups = !blockPromoPopups;
+            prefs.edit().putBoolean("block_promo_popups", blockPromoPopups).apply();
+            pushConfigToJs();
+            row.setChecked(blockPromoPopups, blockPromoPopups ? "ENABLED" : "OFF");
+            showTvToast(blockPromoPopups ? "Promo popups blocked!" : "Promo popups allowed", "#00E676");
+        });
+        quickMenuContainer.addView(promoPopupsRow);
 
-            for (String[] catDef : SPONSOR_CATEGORIES) {
-                final String catKey = catDef[0];
-                final String catLabel = catDef[1];
-                final String hexCol = catDef[2];
-                final String defMode = catDef[3];
-                final String curMode = getCategoryMode(catKey, defMode);
+        // 4. Section: SPONSORBLOCK STUDIO
+        addSectionHeader("⚡ SPONSORBLOCK STUDIO");
+        sponsorMasterRow = new ToggleRowView(this, "SponsorBlock Master Engine", sponsorBlockEnabled, (row) -> {
+            sponsorBlockEnabled = !sponsorBlockEnabled;
+            prefs.edit().putBoolean("sponsorblock_enabled", sponsorBlockEnabled).apply();
+            pushConfigToJs();
+            row.setChecked(sponsorBlockEnabled, sponsorBlockEnabled ? "ACTIVE" : "OFF");
+            showTvToast(sponsorBlockEnabled ? "SponsorBlock enabled!" : "SponsorBlock disabled", "#00E676");
+        });
+        quickMenuContainer.addView(sponsorMasterRow);
 
-                addCategoryModeRow(catLabel, curMode, hexCol, () -> {
-                    String nxt = nextCategoryMode(curMode);
-                    setCategoryMode(catKey, nxt);
-                    pushConfigToJs();
-                    rebuildQuickMenuContent();
-                    showTvToast(catLabel + " → " + formatCategoryModeBadge(nxt), hexCol);
-                });
-            }
+        skipNoticeRow = new ToggleRowView(this, "Show Skip Toast Notice", showSkipNotice, (row) -> {
+            showSkipNotice = !showSkipNotice;
+            prefs.edit().putBoolean("show_skip_notice", showSkipNotice).apply();
+            pushConfigToJs();
+            row.setChecked(showSkipNotice, showSkipNotice ? "ENABLED" : "OFF");
+            showTvToast(showSkipNotice ? "Skip notices on" : "Skip notices off", "#00E676");
+        });
+        quickMenuContainer.addView(skipNoticeRow);
+
+        TextView catSub = new TextView(this);
+        catSub.setText("Per-Category Modes (Click to switch: Auto-Skip | Manual Prompt | Off)");
+        catSub.setTextColor(Color.parseColor("#78909C"));
+        catSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        catSub.setPadding(0, dp(6), 0, dp(4));
+        quickMenuContainer.addView(catSub);
+
+        for (String[] catDef : SPONSOR_CATEGORIES) {
+            final String catKey = catDef[0];
+            final String catLabel = catDef[1];
+            final String hexCol = catDef[2];
+            final String defMode = catDef[3];
+            final String curMode = getCategoryMode(catKey, defMode);
+
+            CategoryModeRowView catRow = new CategoryModeRowView(this, catLabel, curMode, hexCol, (row) -> {
+                String nxt = nextCategoryMode(row.getCurrentMode());
+                setCategoryMode(catKey, nxt);
+                row.setMode(nxt);
+                pushConfigToJs();
+                showTvToast(catLabel + " → " + formatCategoryModeBadge(nxt), hexCol);
+            });
+            categoryRows.put(catKey, catRow);
+            quickMenuContainer.addView(catRow);
         }
 
-        // 5. Section: Playback Speed
-        addSectionHeader("PLAYBACK SPEED (" + formatSpeed(playbackSpeed) + ")");
+        // 5. Section: PLAYBACK & VIDEO ENGINE
+        addSectionHeader("🎬 PLAYBACK & VIDEO ENGINE");
+
+        // Quality selection row
+        TextView qLbl = new TextView(this);
+        qLbl.setText("Preferred Default Quality:");
+        qLbl.setTextColor(Color.parseColor("#B0BEC5"));
+        qLbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        qLbl.setPadding(0, dp(2), 0, dp(4));
+        quickMenuContainer.addView(qLbl);
+
+        LinearLayout qRow = new LinearLayout(this);
+        qRow.setOrientation(LinearLayout.HORIZONTAL);
+        addQualityButton(qRow, "1080p (Default)", "1080");
+        addQualityButton(qRow, "720p", "720");
+        addQualityButton(qRow, "Auto", "auto");
+        quickMenuContainer.addView(qRow);
+
+        // Speed row
+        TextView spdLbl = new TextView(this);
+        spdLbl.setText("Playback Speed:");
+        spdLbl.setTextColor(Color.parseColor("#B0BEC5"));
+        spdLbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        spdLbl.setPadding(0, dp(8), 0, dp(4));
+        quickMenuContainer.addView(spdLbl);
+
         LinearLayout speedRow = new LinearLayout(this);
         speedRow.setOrientation(LinearLayout.HORIZONTAL);
-        speedRow.setGravity(Gravity.CENTER_VERTICAL);
         for (double spd : SPEED_PRESETS) {
-            Button btn = createSpeedPillButton(spd, spd == playbackSpeed);
+            Button btn = createSpeedButton(spd);
+            speedButtons.add(btn);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(34), 1f);
             lp.setMargins(dp(2), 0, dp(2), 0);
             speedRow.addView(btn, lp);
         }
         quickMenuContainer.addView(speedRow);
 
-        // 6. Section: Video Aspect Mode
-        addSectionHeader("VIDEO ASPECT RATIO");
+        // Aspect row
+        TextView aspLbl = new TextView(this);
+        aspLbl.setText("Video Aspect Mode:");
+        aspLbl.setTextColor(Color.parseColor("#B0BEC5"));
+        aspLbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        aspLbl.setPadding(0, dp(8), 0, dp(4));
+        quickMenuContainer.addView(aspLbl);
+
         LinearLayout aspectRow = new LinearLayout(this);
         aspectRow.setOrientation(LinearLayout.HORIZONTAL);
-        aspectRow.addView(createAspectModeButton("Original 16:9", "fit", "fit".equals(videoAspectMode)), new LinearLayout.LayoutParams(0, dp(34), 1f));
-        aspectRow.addView(createAspectModeButton("Zoom to Fill", "fill", "fill".equals(videoAspectMode)), new LinearLayout.LayoutParams(0, dp(34), 1f));
-        aspectRow.addView(createAspectModeButton("Stretch", "stretch", "stretch".equals(videoAspectMode)), new LinearLayout.LayoutParams(0, dp(34), 1f));
+        addAspectButton(aspectRow, "Original 16:9", "fit");
+        addAspectButton(aspectRow, "Zoom to Fill", "fill");
+        addAspectButton(aspectRow, "Stretch", "stretch");
         quickMenuContainer.addView(aspectRow);
 
-        // 7. Section: App OTA Updates from Vagii-Kavagi/vagiiark-tv
-        addSectionHeader("UPDATES & HOTFIXES");
+        // 6. Section: SYSTEM & UPDATES
+        addSectionHeader("🚀 SYSTEM & OTA UPDATES");
         Button updateBtn = createStyledTvButton(
                 "Check GitHub Updates (" + GITHUB_OWNER + "/" + GITHUB_REPO + ")",
-                Color.parseColor("#1E2430"),
+                Color.parseColor("#152033"),
                 Color.parseColor("#448AFF"),
                 () -> checkForAppUpdates(true)
         );
         quickMenuContainer.addView(updateBtn);
 
-        // 8. Close Button
+        Button resetBtn = createStyledTvButton(
+                "Reset All Settings to Defaults",
+                Color.parseColor("#1D1822"),
+                Color.parseColor("#FF5252"),
+                this::resetSettingsToDefault
+        );
+        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        rLp.setMargins(0, dp(6), 0, 0);
+        quickMenuContainer.addView(resetBtn, rLp);
+
+        // Close Button
         Button closeBtn = createStyledTvButton(
-                "Close Settings",
-                Color.parseColor("#263238"),
+                "Close Settings (Back)",
+                Color.parseColor("#1B2230"),
                 Color.WHITE,
                 this::hideQuickMenu
         );
-        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(42)
-        );
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
         closeLp.setMargins(0, dp(18), 0, 0);
         quickMenuContainer.addView(closeBtn, closeLp);
+
+        updateAllMenuStateViews();
     }
 
-    private void updateStatusHeaderText() {
-        if (statusHeaderView == null) return;
-        String ver = "v1.7.0";
-        try {
-            PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-            ver = "v" + pInfo.versionName;
-        } catch (Exception ignored) {
+    private void updateAllMenuStateViews() {
+        updateStatsBadge();
+        if (adblockRow != null) {
+            adblockRow.setChecked(adblockEnabled, adblockEnabled ? "ACTIVE (" + adsBlockedCount + " Ads)" : "DISABLED");
         }
-        statusHeaderView.setText("VagiiArk TV " + ver + "  •  "
-                + adsBlockedCount + " Ads Blocked  •  "
+        if (promoPopupsRow != null) {
+            promoPopupsRow.setChecked(blockPromoPopups, blockPromoPopups ? "ENABLED" : "OFF");
+        }
+        if (sponsorMasterRow != null) {
+            sponsorMasterRow.setChecked(sponsorBlockEnabled, sponsorBlockEnabled ? "ACTIVE" : "OFF");
+        }
+        if (skipNoticeRow != null) {
+            skipNoticeRow.setChecked(showSkipNotice, showSkipNotice ? "ENABLED" : "OFF");
+        }
+        for (String[] catDef : SPONSOR_CATEGORIES) {
+            CategoryModeRowView catRow = categoryRows.get(catDef[0]);
+            if (catRow != null) {
+                catRow.setMode(getCategoryMode(catDef[0], catDef[3]));
+            }
+        }
+        updateSpeedButtonsStyling();
+        updateAspectButtonsStyling();
+        updateQualityButtonsStyling();
+    }
+
+    private void updateStatsBadge() {
+        if (statsBadgeCard == null) return;
+        statsBadgeCard.setText("🛡 " + adsBlockedCount + " Ads Blocked   •   ⏭ "
                 + segmentsSkippedCount + " Segments Skipped (" + (secondsSavedCount / 60) + "m saved)");
     }
 
     private void addSectionHeader(String title) {
         TextView tv = new TextView(this);
         tv.setText(title);
-        tv.setTextColor(Color.parseColor("#448AFF"));
+        tv.setTextColor(Color.parseColor("#00E5FF"));
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         tv.setTypeface(Typeface.create("sans-serif-bold", Typeface.BOLD));
-        tv.setPadding(0, dp(14), 0, dp(6));
+        tv.setPadding(0, dp(16), 0, dp(6));
         quickMenuContainer.addView(tv);
     }
 
-    private void addToggleRow(String label, String valueBadge, boolean isChecked, Runnable onToggle) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setFocusable(true);
-        row.setClickable(true);
-        row.setPadding(dp(14), dp(10), dp(14), dp(10));
+    // ---------------------------------------------------------------------------
+    // STATEFUL TOGGLE ROW VIEW (In-place updates with zero view re-creation!)
+    // ---------------------------------------------------------------------------
+    public class ToggleRowView extends LinearLayout {
+        private final TextView lbl;
+        private final TextView badge;
+        private boolean isChecked;
+        private final RowClickListener listener;
 
-        GradientDrawable normalBg = new GradientDrawable();
-        normalBg.setColor(Color.parseColor("#161A24"));
-        normalBg.setCornerRadius(dp(8));
+        public interface RowClickListener {
+            void onRowClick(ToggleRowView row);
+        }
 
-        GradientDrawable focusBg = new GradientDrawable();
-        focusBg.setColor(Color.parseColor("#24314A"));
-        focusBg.setCornerRadius(dp(8));
-        focusBg.setStroke(dp(2), Color.parseColor("#448AFF"));
+        public ToggleRowView(Context ctx, String title, boolean checked, RowClickListener l) {
+            super(ctx);
+            this.isChecked = checked;
+            this.listener = l;
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.CENTER_VERTICAL);
+            setFocusable(true);
+            setClickable(true);
+            setPadding(dp(14), dp(10), dp(14), dp(10));
 
-        row.setBackground(normalBg);
-        row.setOnFocusChangeListener((v, hasFocus) -> row.setBackground(hasFocus ? focusBg : normalBg));
-        row.setOnClickListener(v -> onToggle.run());
+            GradientDrawable normalBg = new GradientDrawable();
+            normalBg.setColor(Color.parseColor("#121724"));
+            normalBg.setCornerRadius(dp(8));
 
-        TextView lbl = new TextView(this);
-        lbl.setText(label);
-        lbl.setTextColor(Color.WHITE);
-        lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        row.addView(lbl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            GradientDrawable focusBg = new GradientDrawable();
+            focusBg.setColor(Color.parseColor("#223354"));
+            focusBg.setCornerRadius(dp(8));
+            focusBg.setStroke(dp(2), Color.parseColor("#00E5FF"));
 
-        TextView badge = new TextView(this);
-        badge.setText(valueBadge);
-        badge.setTextColor(isChecked ? Color.parseColor("#00E676") : Color.parseColor("#FF5252"));
-        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        badge.setTypeface(Typeface.create("sans-serif-bold", Typeface.BOLD));
-        row.addView(badge);
+            setBackground(normalBg);
+            setOnFocusChangeListener((v, hasFocus) -> setBackground(hasFocus ? focusBg : normalBg));
+            setOnClickListener(v -> {
+                if (listener != null) listener.onRowClick(this);
+            });
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        lp.setMargins(0, dp(2), 0, dp(2));
-        quickMenuContainer.addView(row, lp);
+            lbl = new TextView(ctx);
+            lbl.setText(title);
+            lbl.setTextColor(Color.WHITE);
+            lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            addView(lbl, new LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            badge = new TextView(ctx);
+            badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            badge.setTypeface(Typeface.create("sans-serif-bold", Typeface.BOLD));
+            addView(badge);
+
+            setChecked(isChecked, isChecked ? "ENABLED" : "OFF");
+
+            LayoutParams lp = new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, dp(2), 0, dp(2));
+            setLayoutParams(lp);
+        }
+
+        public void setChecked(boolean checked, String badgeText) {
+            this.isChecked = checked;
+            badge.setText(badgeText);
+            badge.setTextColor(checked ? Color.parseColor("#00E676") : Color.parseColor("#FF5252"));
+        }
     }
 
-    private void addCategoryModeRow(String label, String currentMode, String hexAccent, Runnable onCycle) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setFocusable(true);
-        row.setClickable(true);
-        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+    // ---------------------------------------------------------------------------
+    // STATEFUL CATEGORY MODE ROW VIEW
+    // ---------------------------------------------------------------------------
+    public class CategoryModeRowView extends LinearLayout {
+        private final TextView dot;
+        private final TextView lbl;
+        private final TextView badge;
+        private String currentMode;
+        private final String hexAccent;
+        private final CatClickListener listener;
 
-        GradientDrawable normalBg = new GradientDrawable();
-        normalBg.setColor(Color.parseColor("#151922"));
-        normalBg.setCornerRadius(dp(6));
-
-        GradientDrawable focusBg = new GradientDrawable();
-        focusBg.setColor(Color.parseColor("#26324D"));
-        focusBg.setCornerRadius(dp(6));
-        focusBg.setStroke(dp(2), Color.parseColor(hexAccent));
-
-        row.setBackground(normalBg);
-        row.setOnFocusChangeListener((v, hasFocus) -> row.setBackground(hasFocus ? focusBg : normalBg));
-        row.setOnClickListener(v -> onCycle.run());
-
-        TextView dot = new TextView(this);
-        dot.setText("● ");
-        try {
-            dot.setTextColor(Color.parseColor(hexAccent));
-        } catch (Exception e) {
-            dot.setTextColor(Color.WHITE);
+        public interface CatClickListener {
+            void onCatClick(CategoryModeRowView row);
         }
-        dot.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        row.addView(dot);
 
-        TextView lbl = new TextView(this);
-        lbl.setText(label);
-        lbl.setTextColor(Color.WHITE);
-        lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        row.addView(lbl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        public CategoryModeRowView(Context ctx, String title, String mode, String hexCol, CatClickListener l) {
+            super(ctx);
+            this.currentMode = mode;
+            this.hexAccent = hexCol;
+            this.listener = l;
 
-        TextView badge = new TextView(this);
-        badge.setText(formatCategoryModeBadge(currentMode));
-        if ("auto".equals(currentMode)) {
-            badge.setTextColor(Color.parseColor("#00E676"));
-        } else if ("manual".equals(currentMode)) {
-            badge.setTextColor(Color.parseColor("#FFD600"));
-        } else {
-            badge.setTextColor(Color.parseColor("#78909C"));
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.CENTER_VERTICAL);
+            setFocusable(true);
+            setClickable(true);
+            setPadding(dp(12), dp(8), dp(12), dp(8));
+
+            GradientDrawable normalBg = new GradientDrawable();
+            normalBg.setColor(Color.parseColor("#111622"));
+            normalBg.setCornerRadius(dp(6));
+
+            GradientDrawable focusBg = new GradientDrawable();
+            focusBg.setColor(Color.parseColor("#223354"));
+            focusBg.setCornerRadius(dp(6));
+            focusBg.setStroke(dp(2), Color.parseColor(hexCol));
+
+            setBackground(normalBg);
+            setOnFocusChangeListener((v, hasFocus) -> setBackground(hasFocus ? focusBg : normalBg));
+            setOnClickListener(v -> {
+                if (listener != null) listener.onCatClick(this);
+            });
+
+            dot = new TextView(ctx);
+            dot.setText("● ");
+            try {
+                dot.setTextColor(Color.parseColor(hexCol));
+            } catch (Exception e) {
+                dot.setTextColor(Color.WHITE);
+            }
+            dot.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            addView(dot);
+
+            lbl = new TextView(ctx);
+            lbl.setText(title);
+            lbl.setTextColor(Color.WHITE);
+            lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            addView(lbl, new LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            badge = new TextView(ctx);
+            badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            badge.setTypeface(Typeface.create("sans-serif-bold", Typeface.BOLD));
+            addView(badge);
+
+            setMode(currentMode);
+
+            LayoutParams lp = new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, dp(2), 0, dp(2));
+            setLayoutParams(lp);
         }
-        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        badge.setTypeface(Typeface.create("sans-serif-bold", Typeface.BOLD));
-        row.addView(badge);
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        lp.setMargins(0, dp(2), 0, dp(2));
-        quickMenuContainer.addView(row, lp);
+        public String getCurrentMode() {
+            return currentMode;
+        }
+
+        public void setMode(String mode) {
+            this.currentMode = mode;
+            badge.setText(formatCategoryModeBadge(mode));
+            if ("auto".equals(mode)) {
+                badge.setTextColor(Color.parseColor("#00E676"));
+            } else if ("manual".equals(mode)) {
+                badge.setTextColor(Color.parseColor("#FFD600"));
+            } else {
+                badge.setTextColor(Color.parseColor("#78909C"));
+            }
+        }
     }
 
-    private Button createSpeedPillButton(double spd, boolean isSelected) {
+    private Button createSpeedButton(double spd) {
         Button btn = new Button(this);
         btn.setText(formatSpeed(spd));
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        btn.setTypeface(Typeface.create("sans-serif-medium", isSelected ? Typeface.BOLD : Typeface.NORMAL));
         btn.setPadding(0, 0, 0, 0);
-
-        GradientDrawable normalBg = new GradientDrawable();
-        normalBg.setColor(isSelected ? Color.parseColor("#448AFF") : Color.parseColor("#161A24"));
-        normalBg.setCornerRadius(dp(6));
-
-        GradientDrawable focusBg = new GradientDrawable();
-        focusBg.setColor(isSelected ? Color.parseColor("#2979FF") : Color.parseColor("#2E3A52"));
-        focusBg.setCornerRadius(dp(6));
-        focusBg.setStroke(dp(2), Color.WHITE);
-
-        btn.setBackground(normalBg);
-        btn.setTextColor(isSelected ? Color.WHITE : Color.parseColor("#B0BEC5"));
-        btn.setOnFocusChangeListener((v, hasFocus) -> btn.setBackground(hasFocus ? focusBg : normalBg));
+        btn.setTag(spd);
 
         btn.setOnClickListener(v -> {
             playbackSpeed = spd;
             prefs.edit().putFloat("playback_speed", (float) playbackSpeed).apply();
             pushConfigToJs();
-            rebuildQuickMenuContent();
+            updateSpeedButtonsStyling();
             showTvToast("Speed: " + formatSpeed(spd), "#448AFF");
         });
         return btn;
     }
 
-    private Button createAspectModeButton(String label, String mode, boolean isSelected) {
+    private void updateSpeedButtonsStyling() {
+        for (Button btn : speedButtons) {
+            double spd = (double) btn.getTag();
+            boolean isSelected = Math.abs(spd - playbackSpeed) < 0.01;
+            btn.setTypeface(Typeface.create("sans-serif-medium", isSelected ? Typeface.BOLD : Typeface.NORMAL));
+
+            GradientDrawable normalBg = new GradientDrawable();
+            normalBg.setColor(isSelected ? Color.parseColor("#2979FF") : Color.parseColor("#141926"));
+            normalBg.setCornerRadius(dp(6));
+
+            GradientDrawable focusBg = new GradientDrawable();
+            focusBg.setColor(isSelected ? Color.parseColor("#0050D6") : Color.parseColor("#253654"));
+            focusBg.setCornerRadius(dp(6));
+            focusBg.setStroke(dp(2), Color.WHITE);
+
+            btn.setBackground(normalBg);
+            btn.setTextColor(isSelected ? Color.WHITE : Color.parseColor("#B0BEC5"));
+            btn.setOnFocusChangeListener((v, hasFocus) -> btn.setBackground(hasFocus ? focusBg : normalBg));
+        }
+    }
+
+    private void addAspectButton(LinearLayout parent, String label, String mode) {
         Button btn = new Button(this);
         btn.setText(label);
         btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         btn.setPadding(0, 0, 0, 0);
-
-        GradientDrawable normalBg = new GradientDrawable();
-        normalBg.setColor(isSelected ? Color.parseColor("#00E676") : Color.parseColor("#161A24"));
-        normalBg.setCornerRadius(dp(6));
-
-        GradientDrawable focusBg = new GradientDrawable();
-        focusBg.setColor(isSelected ? Color.parseColor("#00C853") : Color.parseColor("#2E3A52"));
-        focusBg.setCornerRadius(dp(6));
-        focusBg.setStroke(dp(2), Color.WHITE);
-
-        btn.setBackground(normalBg);
-        btn.setTextColor(isSelected ? Color.BLACK : Color.parseColor("#B0BEC5"));
-        btn.setOnFocusChangeListener((v, hasFocus) -> btn.setBackground(hasFocus ? focusBg : normalBg));
+        btn.setTag(mode);
 
         btn.setOnClickListener(v -> {
             videoAspectMode = mode;
             prefs.edit().putString("video_aspect_mode", videoAspectMode).apply();
             pushConfigToJs();
-            rebuildQuickMenuContent();
+            updateAspectButtonsStyling();
             showTvToast("Aspect: " + label, "#00E676");
         });
-        return btn;
+        aspectButtons.add(btn);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        lp.setMargins(dp(2), 0, dp(2), 0);
+        parent.addView(btn, lp);
+    }
+
+    private void updateAspectButtonsStyling() {
+        for (Button btn : aspectButtons) {
+            String m = (String) btn.getTag();
+            boolean isSelected = m.equals(videoAspectMode);
+
+            GradientDrawable normalBg = new GradientDrawable();
+            normalBg.setColor(isSelected ? Color.parseColor("#00E676") : Color.parseColor("#141926"));
+            normalBg.setCornerRadius(dp(6));
+
+            GradientDrawable focusBg = new GradientDrawable();
+            focusBg.setColor(isSelected ? Color.parseColor("#00C853") : Color.parseColor("#253654"));
+            focusBg.setCornerRadius(dp(6));
+            focusBg.setStroke(dp(2), Color.WHITE);
+
+            btn.setBackground(normalBg);
+            btn.setTextColor(isSelected ? Color.BLACK : Color.parseColor("#B0BEC5"));
+            btn.setOnFocusChangeListener((v, hasFocus) -> btn.setBackground(hasFocus ? focusBg : normalBg));
+        }
+    }
+
+    private void addQualityButton(LinearLayout parent, String label, String qVal) {
+        Button btn = new Button(this);
+        btn.setText(label);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        btn.setPadding(0, 0, 0, 0);
+        btn.setTag(qVal);
+
+        btn.setOnClickListener(v -> {
+            preferredQuality = qVal;
+            prefs.edit().putString("preferred_quality", preferredQuality).apply();
+            pushConfigToJs();
+            updateQualityButtonsStyling();
+            showTvToast("Preferred Quality: " + label, "#00E5FF");
+        });
+        qualityButtons.add(btn);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        lp.setMargins(dp(2), 0, dp(2), 0);
+        parent.addView(btn, lp);
+    }
+
+    private void updateQualityButtonsStyling() {
+        for (Button btn : qualityButtons) {
+            String q = (String) btn.getTag();
+            boolean isSelected = q.equals(preferredQuality);
+
+            GradientDrawable normalBg = new GradientDrawable();
+            normalBg.setColor(isSelected ? Color.parseColor("#00E5FF") : Color.parseColor("#141926"));
+            normalBg.setCornerRadius(dp(6));
+
+            GradientDrawable focusBg = new GradientDrawable();
+            focusBg.setColor(isSelected ? Color.parseColor("#00B0FF") : Color.parseColor("#253654"));
+            focusBg.setCornerRadius(dp(6));
+            focusBg.setStroke(dp(2), Color.WHITE);
+
+            btn.setBackground(normalBg);
+            btn.setTextColor(isSelected ? Color.BLACK : Color.parseColor("#B0BEC5"));
+            btn.setOnFocusChangeListener((v, hasFocus) -> btn.setBackground(hasFocus ? focusBg : normalBg));
+        }
     }
 
     private Button createStyledTvButton(String label, int bgColor, int textColor, Runnable onClick) {
@@ -871,7 +1081,7 @@ public class MainActivity extends Activity {
         GradientDrawable focusBg = new GradientDrawable();
         focusBg.setColor(Color.parseColor("#2C3A56"));
         focusBg.setCornerRadius(dp(8));
-        focusBg.setStroke(dp(2), Color.parseColor("#448AFF"));
+        focusBg.setStroke(dp(2), Color.parseColor("#00E5FF"));
 
         btn.setBackground(normalBg);
         btn.setOnFocusChangeListener((v, hasFocus) -> btn.setBackground(hasFocus ? focusBg : normalBg));
@@ -879,12 +1089,39 @@ public class MainActivity extends Activity {
         return btn;
     }
 
+    private void resetSettingsToDefault() {
+        adblockEnabled = true;
+        blockPromoPopups = true;
+        sponsorBlockEnabled = true;
+        showSkipNotice = true;
+        preferredQuality = "1080";
+        playbackSpeed = 1.0;
+        videoAspectMode = "fit";
+
+        for (String[] catDef : SPONSOR_CATEGORIES) {
+            setCategoryMode(catDef[0], catDef[3]);
+        }
+        prefs.edit()
+                .putBoolean("adblock_enabled", true)
+                .putBoolean("block_promo_popups", true)
+                .putBoolean("sponsorblock_enabled", true)
+                .putBoolean("show_skip_notice", true)
+                .putString("preferred_quality", "1080")
+                .putFloat("playback_speed", 1.0f)
+                .putString("video_aspect_mode", "fit")
+                .apply();
+
+        pushConfigToJs();
+        updateAllMenuStateViews();
+        showTvToast("Settings reset to defaults!", "#00E676");
+    }
+
     // ---------------------------------------------------------------------------
-    // OTA UPDATE ENGINE (Connects to Vagii-Kavagi/vagiiark-tv Releases)
+    // OTA UPDATE ENGINE
     // ---------------------------------------------------------------------------
     private void checkForAppUpdates(boolean userInitiated) {
         if (userInitiated) {
-            showTvToast("Checking GitHub Releases...", "#448AFF");
+            showTvToast("Checking GitHub Releases...", "#00E5FF");
         }
         ioExecutor.execute(() -> {
             try {
@@ -917,7 +1154,7 @@ public class MainActivity extends Activity {
                         }
                     }
 
-                    String currentVer = "v1.7.0";
+                    String currentVer = "v1.7.1";
                     try {
                         currentVer = "v" + getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
                     } catch (Exception ignored) {
@@ -1002,7 +1239,7 @@ public class MainActivity extends Activity {
                             injectEngineScripts();
                             if (userInitiated) {
                                 showTvToast("Applied latest GitHub hotfix!", "#00E676");
-                                if (isQuickMenuOpen()) showQuickMenu();
+                                updateAllMenuStateViews();
                             }
                         });
                         return;
@@ -1014,13 +1251,14 @@ public class MainActivity extends Activity {
     }
 
     // ---------------------------------------------------------------------------
-    // REMOTE CONTROL KEY EVENTS
+    // REMOTE CONTROL KEY EVENTS & FOCUS LOCK
     // ---------------------------------------------------------------------------
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         int keyCode = event.getKeyCode();
         int action = event.getAction();
 
+        // When Quick Menu is open, TRAP FOCUS completely inside the menu!
         if (isQuickMenuOpen()) {
             if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE || keyCode == KeyEvent.KEYCODE_MENU) {
                 if (action == KeyEvent.ACTION_UP) {
@@ -1028,10 +1266,19 @@ public class MainActivity extends Activity {
                 }
                 return true;
             }
-            return super.dispatchKeyEvent(event);
+
+            // Route keyevent to the menu view hierarchy
+            boolean consumed = quickMenuScrim.dispatchKeyEvent(event);
+            if (consumed) return true;
+
+            // Ensure focus never escapes to WebView while menu is open
+            if (quickMenuContainer != null && quickMenuContainer.findFocus() == null) {
+                if (adblockRow != null) adblockRow.requestFocus();
+            }
+            return true; // NEVER let events leak to WebView while menu is open!
         }
 
-        // Dedicated keys to instantly toggle Quick Menu: MENU, INFO, SETTINGS, GUIDE, PROG_RED/BLUE
+        // Dedicated keys to toggle Quick Menu: MENU, INFO, SETTINGS, GUIDE, PROG_RED/BLUE
         if (keyCode == KeyEvent.KEYCODE_MENU
                 || keyCode == KeyEvent.KEYCODE_SETTINGS
                 || keyCode == KeyEvent.KEYCODE_INFO
@@ -1113,6 +1360,7 @@ public class MainActivity extends Activity {
                     .putInt("stat_segments_skipped", segmentsSkippedCount)
                     .putLong("stat_seconds_saved", secondsSavedCount)
                     .apply();
+            mainHandler.post(MainActivity.this::updateStatsBadge);
         }
 
         @JavascriptInterface

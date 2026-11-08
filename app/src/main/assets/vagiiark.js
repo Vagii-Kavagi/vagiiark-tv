@@ -47,7 +47,7 @@
             };
         }
 
-        // Set default preferred quality to 1080 in localStorage
+        // Set default preferred quality in localStorage
         const nowTs = Date.now();
         localStorage.setItem('yt-player-quality', JSON.stringify({
             data: JSON.stringify({ quality: 1080, previousQuality: 1080 }),
@@ -61,7 +61,10 @@
     // ---------------------------------------------------------------------------
     const config = {
         adblockEnabled: true,
+        blockPromoPopups: true,
         sponsorBlockEnabled: true,
+        showSkipNotice: true,
+        preferredQuality: '1080',
         speed: 1.0,
         videoAspectMode: 'fit',
         fastMode: true,
@@ -93,7 +96,7 @@
     window.__vagiiArkConfig = config;
 
     // ---------------------------------------------------------------------------
-    // 2. CLEAN CSS & AD REMOVAL (Zero distortion, keeps native YouTube colors)
+    // 2. STYLING FIXES (Eliminates ugly black highlight rectangles on titles)
     // ---------------------------------------------------------------------------
     function applyCustomCss() {
         let styleEl = document.getElementById('vagiiark-css');
@@ -104,7 +107,7 @@
         }
 
         styleEl.textContent = `
-            /* Hide DOM-level ad containers */
+            /* Hide DOM-level ad containers & promo banners */
             ytlr-ad-placement-renderer,
             ytlr-masthead-ad-renderer,
             ytlr-promoted-video-renderer,
@@ -121,6 +124,40 @@
                 width: 0 !important;
                 height: 0 !important;
             }
+            ${config.blockPromoPopups ? `
+            /* Suppress promo popups, survey dialogs, and upsells */
+            ytlr-mealbar-promo-renderer,
+            ytlr-upsell-dialog-renderer,
+            .yt-mealbar-promo-renderer,
+            ytlr-ypc-offer-renderer {
+                display: none !important;
+            }
+            ` : ''}
+
+            /* FIX: Completely remove solid black background highlight boxes on video titles & channel metadata! */
+            ytlr-tile-renderer,
+            ytlr-tile-renderer *,
+            ytlr-tile-renderer yt-formatted-string,
+            ytlr-tile-renderer yt-formatted-string *,
+            ytlr-tile-renderer #title,
+            ytlr-tile-renderer #title *,
+            ytlr-tile-renderer #metadata,
+            ytlr-tile-renderer #metadata *,
+            ytlr-tile-renderer #metadata-line,
+            ytlr-tile-renderer #metadata-line *,
+            .ytlr-tile-renderer yt-formatted-string,
+            .ytlr-tile-renderer yt-formatted-string *,
+            ytlr-watch-metadata,
+            ytlr-watch-metadata *,
+            span.yt-core-attributed-string,
+            span.yt-core-attributed-string *,
+            .ytlr-video-title-tray,
+            .ytlr-video-title-tray * {
+                background: transparent !important;
+                background-color: transparent !important;
+                text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85) !important;
+            }
+
             /* Suppress WebView default play icon / poster flash */
             video::-webkit-media-controls,
             video::-webkit-media-controls-overlay-play-button,
@@ -130,12 +167,14 @@
                 opacity: 0 !important;
                 pointer-events: none !important;
             }
+
             /* Fast D-pad navigation */
             ${config.fastMode ? `
             ytlr-tile-renderer, ytlr-button-renderer {
                 transition-duration: 80ms !important;
             }
             ` : ''}
+
             /* Aspect ratio handling */
             ${config.videoAspectMode === 'fill' ? `
             .html5-main-video {
@@ -179,7 +218,7 @@
                 bottom: 60px;
                 right: 60px;
                 z-index: 999999;
-                background: rgba(18, 22, 32, 0.94);
+                background: rgba(14, 18, 28, 0.95);
                 border: 2px solid #00E676;
                 border-radius: 28px;
                 padding: 14px 28px;
@@ -189,8 +228,8 @@
                 font-weight: bold;
                 display: none;
                 align-items: center;
-                gap: 12px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+                gap: 14px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.85);
                 cursor: pointer;
             `;
             el.addEventListener('click', skipActiveManualSegment);
@@ -212,7 +251,7 @@
         prompt.style.borderColor = color || '#00E676';
         prompt.innerHTML = `
             <span style="color:${color || '#00E676'}">⏭ Skip ${label || 'Segment'}</span>
-            <span style="background:#2A354A; padding:4px 10px; border-radius:14px; font-size:14px;">Press OK</span>
+            <span style="background:#24324D; padding:4px 12px; border-radius:14px; font-size:14px; color:#FFFFFF;">Press OK</span>
         `;
         prompt.style.display = 'flex';
         prompt.focus();
@@ -232,7 +271,7 @@
             if (BRIDGE && BRIDGE.recordSponsorSkipped) {
                 BRIDGE.recordSponsorSkipped(activeManualSegment.category, activeManualSegment.end - activeManualSegment.start);
             }
-            if (BRIDGE && BRIDGE.showToast) {
+            if (config.showSkipNotice && BRIDGE && BRIDGE.showToast) {
                 BRIDGE.showToast("Skipped " + formatCategoryName(activeManualSegment.category), "#00E676");
             }
         }
@@ -314,7 +353,7 @@
             if (BRIDGE && BRIDGE.recordSponsorSkipped) {
                 BRIDGE.recordSponsorSkipped(matched.category, matched.end - matched.start);
             }
-            if (BRIDGE && BRIDGE.showToast) {
+            if (config.showSkipNotice && BRIDGE && BRIDGE.showToast) {
                 BRIDGE.showToast("Skipped " + formatCategoryName(matched.category), getCategoryColor(matched.category));
             }
         } else if (mode === 'manual') {
@@ -329,18 +368,21 @@
     // ---------------------------------------------------------------------------
     let qualityAppliedForVideoId = null;
 
-    function applyInitial1080pQuality(vId) {
+    function applyInitialQuality(vId) {
         if (!vId || qualityAppliedForVideoId === vId) return;
         qualityAppliedForVideoId = vId;
+
+        const targetQ = config.preferredQuality === '720' ? 'hd720' : (config.preferredQuality === '1080' ? 'hd1080' : 'auto');
+        if (targetQ === 'auto') return;
 
         try {
             const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
             if (mp) {
                 if (typeof mp.setPlaybackQualityRange === 'function') {
-                    mp.setPlaybackQualityRange('hd1080', 'hd1080');
+                    mp.setPlaybackQualityRange(targetQ, targetQ);
                 }
                 if (typeof mp.setPlaybackQuality === 'function') {
-                    mp.setPlaybackQuality('hd1080');
+                    mp.setPlaybackQuality(targetQ);
                 }
             }
         } catch (e) {}
@@ -365,7 +407,7 @@
     }
 
     // ---------------------------------------------------------------------------
-    // 5. ON-SCREEN VAGIIARK SETTINGS BUTTON (Easy D-pad Access)
+    // 5. ON-SCREEN VAGIIARK SETTINGS BUTTON
     // ---------------------------------------------------------------------------
     function injectSettingsButton() {
         if (document.getElementById('vagiiark-settings-btn')) return;
@@ -381,10 +423,10 @@
             bottom: 24px;
             left: 24px;
             z-index: 99999;
-            background: rgba(20, 25, 36, 0.88);
-            border: 1px solid rgba(255, 255, 255, 0.25);
+            background: rgba(15, 20, 32, 0.90);
+            border: 1.5px solid rgba(68, 138, 255, 0.45);
             border-radius: 20px;
-            padding: 8px 16px;
+            padding: 8px 18px;
             color: #FFFFFF;
             font-family: sans-serif;
             font-size: 13px;
@@ -394,9 +436,9 @@
             gap: 8px;
             cursor: pointer;
             transition: all 0.15s ease;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.6);
         `;
-        btn.innerHTML = `<span style="color:#448AFF">⚡</span> <span>VagiiArk</span>`;
+        btn.innerHTML = `<span style="color:#00E5FF; font-size:15px;">⚡</span> <span>VagiiArk Menu</span>`;
 
         btn.addEventListener('focus', function () {
             btn.style.background = '#2979FF';
@@ -404,8 +446,8 @@
             btn.style.transform = 'scale(1.08)';
         });
         btn.addEventListener('blur', function () {
-            btn.style.background = 'rgba(20, 25, 36, 0.88)';
-            btn.style.borderColor = 'rgba(255, 255, 255, 0.25)';
+            btn.style.background = 'rgba(15, 20, 32, 0.90)';
+            btn.style.borderColor = 'rgba(68, 138, 255, 0.45)';
             btn.style.transform = 'scale(1.0)';
         });
         btn.addEventListener('click', function () {
@@ -427,7 +469,7 @@
     }
 
     // ---------------------------------------------------------------------------
-    // 6. EVENT DELEGATION & LOOP
+    // 6. EVENT DELEGATION
     // ---------------------------------------------------------------------------
     document.addEventListener('play', function (e) {
         if (e.target && e.target.tagName === 'VIDEO') {
@@ -436,7 +478,7 @@
             const vId = extractVideoId();
             if (vId && vId !== currentVideoId) {
                 currentVideoId = vId;
-                applyInitial1080pQuality(vId);
+                applyInitialQuality(vId);
                 fetchSponsorSegments(vId);
             }
         }
@@ -456,7 +498,7 @@
             const vId = extractVideoId();
             if (vId && vId !== currentVideoId) {
                 currentVideoId = vId;
-                applyInitial1080pQuality(vId);
+                applyInitialQuality(vId);
                 fetchSponsorSegments(vId);
             }
         }
