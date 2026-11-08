@@ -5,74 +5,35 @@
     const BRIDGE = window.VagiiBridge || null;
 
     // ---------------------------------------------------------------------------
-    // 0. UNLOCK 1080p60 & 1080p PREMIUM ON XIAOMI MiTV-MSSP2 (1280x720 UI surface)
-    //    Why YouTube TV showed "Auto • 720p (Max 720p)":
-    //    1) YouTube TV reads `document.documentElement.clientWidth` / `window.innerWidth`
-    //       and sends `clientScreen.width` & `clientScreen.height` in `/youtubei/v1/player`!
-    //       With `webView.setInitialScale(67)` + `<meta name="viewport" content="width=1920, height=1080">`,
-    //       Android WebView renders a true 1920x1080 viewport scaled 66.67% to fit 1280x720 edge-to-edge!
-    //    2) We also intercept `/youtubei/v1/player` POST bodies & force `width: 1920, height: 1080`.
+    // 0. MEDIA CAPABILITIES HOOKS - UNLOCK 1080p60 & 1080p PREMIUM
     // ---------------------------------------------------------------------------
-    function ensure1080pViewportMeta() {
-        try {
-            const head = document.head || document.documentElement;
-            if (!head) return;
-            let meta = document.querySelector('meta[name="viewport"]');
-            if (!meta) {
-                meta = document.createElement('meta');
-                meta.name = 'viewport';
-                head.appendChild(meta);
-            }
-            const desired = 'width=1920, height=1080, initial-scale=0.6666667, minimum-scale=0.6666667, maximum-scale=0.6666667, user-scalable=no';
-            if (meta.getAttribute('content') !== desired) {
-                meta.setAttribute('content', desired);
-            }
-        } catch (e) {}
-    }
-    ensure1080pViewportMeta();
-    document.addEventListener('DOMContentLoaded', ensure1080pViewportMeta);
-
     try {
-        Object.defineProperty(window, 'devicePixelRatio', {
-            get: function () { return 1.0; },
-            configurable: true
-        });
-        if (window.screen) {
-            Object.defineProperty(window.screen, 'width', { get: function () { return 1920; }, configurable: true });
-            Object.defineProperty(window.screen, 'height', { get: function () { return 1080; }, configurable: true });
-            Object.defineProperty(window.screen, 'availWidth', { get: function () { return 1920; }, configurable: true });
-            Object.defineProperty(window.screen, 'availHeight', { get: function () { return 1080; }, configurable: true });
-        }
-
-        // Hook JSON.stringify so any InnerTube request payload with clientScreen / playerWidth reports 1920x1080
-        const origJsonStringify = JSON.stringify;
-        JSON.stringify = function (val, replacer, space) {
-            try {
-                if (val && typeof val === 'object') {
-                    if (val.context && val.context.client) {
-                        val.context.client.screenWidthPoints = 1920;
-                        val.context.client.screenHeightPoints = 1080;
-                        val.context.client.screenPixelDensity = 1;
-                        val.context.client.windowWidthPoints = 1920;
-                        val.context.client.windowHeightPoints = 1080;
-                    }
-                    if (val.playbackContext && val.playbackContext.contentPlaybackContext) {
-                        val.playbackContext.contentPlaybackContext.playerWidthPixels = 1920;
-                        val.playbackContext.contentPlaybackContext.playerHeightPixels = 1080;
+        if (navigator.mediaCapabilities && typeof navigator.mediaCapabilities.decodingInfo === 'function') {
+            const origDecodingInfo = navigator.mediaCapabilities.decodingInfo.bind(navigator.mediaCapabilities);
+            navigator.mediaCapabilities.decodingInfo = async function (mediaConfig) {
+                const res = await origDecodingInfo(mediaConfig);
+                if (mediaConfig && mediaConfig.video) {
+                    const h = mediaConfig.video.height || 0;
+                    const w = mediaConfig.video.width || 0;
+                    if (h <= 1088 && w <= 1920) {
+                        return {
+                            supported: true,
+                            smooth: true,
+                            powerEfficient: true,
+                            keySystemAccess: res ? res.keySystemAccess : null
+                        };
                     }
                 }
-            } catch (e) {}
-            return origJsonStringify.call(this, val, replacer, space);
-        };
+                return res;
+            };
+        }
 
         if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
             const origIsTypeSupported = MediaSource.isTypeSupported.bind(MediaSource);
             MediaSource.isTypeSupported = function (mimeType) {
                 if (!mimeType || typeof mimeType !== 'string') return false;
                 const lower = mimeType.toLowerCase();
-                if (lower.indexOf('av01') !== -1) {
-                    return false;
-                }
+                if (lower.indexOf('av01') !== -1) return false;
                 const hMatch = lower.match(/height=(\d+)/);
                 if (hMatch && parseInt(hMatch[1], 10) > 1088) return false;
                 const wMatch = lower.match(/width=(\d+)/);
@@ -86,22 +47,23 @@
             };
         }
 
-        // Persist 1080p as the default preferred quality in YouTube TV localStorage
+        // Set default preferred quality to 1080 in localStorage
         const nowTs = Date.now();
-        localStorage.setItem('yt-player-quality', origJsonStringify({
-            data: origJsonStringify({ quality: 1080, previousQuality: 1080 }),
+        localStorage.setItem('yt-player-quality', JSON.stringify({
+            data: JSON.stringify({ quality: 1080, previousQuality: 1080 }),
             expiration: nowTs + 31536000000,
             creation: nowTs
         }));
     } catch (e) {}
 
-    // Modes for SponsorBlock categories: 'auto' (Auto-Skip), 'manual' (Prompt to Skip with OK), 'off' (Do nothing)
+    // ---------------------------------------------------------------------------
+    // 1. CONFIGURATION
+    // ---------------------------------------------------------------------------
     const config = {
         adblockEnabled: true,
         sponsorBlockEnabled: true,
         speed: 1.0,
-        videoAspectMode: 'fit', // 'fit' (Original), 'fill' (Zoom to Fill 16:9 Screen), 'stretch' (Stretch 16:9)
-        colorBoostMode: 'vivid', // 'vivid' (Full-Range Rich Color), 'cinema' (Deep Contrast), 'off' (Standard)
+        videoAspectMode: 'fit',
         fastMode: true,
         categories: {
             sponsor: 'auto',
@@ -131,19 +93,18 @@
     window.__vagiiArkConfig = config;
 
     // ---------------------------------------------------------------------------
-    // 1. CLEAN YouTube TV STYLING & AD-CONTAINER HIDING
-    //    (Zero GPU blur filters — uses crisp translucent RGBA so Mali-470 runs at 60fps!)
+    // 2. CLEAN CSS & AD REMOVAL (Zero distortion, keeps native YouTube colors)
     // ---------------------------------------------------------------------------
     function applyCustomCss() {
-        let styleEl = document.getElementById('vagiiark-fast-css');
+        let styleEl = document.getElementById('vagiiark-css');
         if (!styleEl) {
             styleEl = document.createElement('style');
-            styleEl.id = 'vagiiark-fast-css';
+            styleEl.id = 'vagiiark-css';
             (document.head || document.documentElement).appendChild(styleEl);
         }
 
         styleEl.textContent = `
-            /* Hide remaining DOM-level ad containers and promo banners immediately */
+            /* Hide DOM-level ad containers */
             ytlr-ad-placement-renderer,
             ytlr-masthead-ad-renderer,
             ytlr-promoted-video-renderer,
@@ -160,73 +121,35 @@
                 width: 0 !important;
                 height: 0 !important;
             }
-            /* Hide any WebView default video poster / play-icon flash */
+            /* Suppress WebView default play icon / poster flash */
             video::-webkit-media-controls,
             video::-webkit-media-controls-overlay-play-button,
             video::-webkit-media-controls-start-playback-button,
-            .ytp-cued-thumbnail-overlay,
-            .ytp-spinner,
-            .html5-video-loader {
+            .ytp-cued-thumbnail-overlay {
                 display: none !important;
                 opacity: 0 !important;
                 pointer-events: none !important;
             }
-            /* Ensure video title, channel metadata, chapter titles & time labels NEVER get solid black label backgrounds */
-            yt-formatted-string,
-            yt-formatted-string *,
-            ytlr-video-title-tray,
-            ytlr-video-title-tray *,
-            .ytlr-video-title-tray,
-            ytlr-player-header-renderer,
-            ytlr-player-header-renderer *,
-            ytlr-progress-bar,
-            ytlr-progress-bar *,
-            ytlr-multi-markers-player-bar-renderer,
-            ytlr-multi-markers-player-bar-renderer *,
-            ytlr-watch-metadata,
-            ytlr-watch-metadata *,
-            .ytlr-video-owner-renderer,
-            .ytlr-video-owner-renderer *,
-            span[style*="background"],
-            div[style*="background-color: rgb(0, 0, 0)"],
-            span[style*="background-color: rgb(0, 0, 0)"] {
-                background-color: transparent !important;
+            /* Fast D-pad navigation */
+            ${config.fastMode ? `
+            ytlr-tile-renderer, ytlr-button-renderer {
+                transition-duration: 80ms !important;
             }
-            /* Restore YouTube TV's soft top scrim gradient so white text is crisp without black boxes */
-            ytlr-player-header-renderer {
-                background: linear-gradient(180deg, rgba(0,0,0,0.68) 0%, rgba(0,0,0,0) 100%) !important;
-            }
-            /* Disable heavy ambient canvas and any backdrop-filter blur that chokes Mali-470 GPU */
-            #cinematics, .ytp-cinematics, canvas.ambient-canvas {
-                display: none !important;
-            }
-            *, *::before, *::after {
-                backdrop-filter: none !important;
-                -webkit-backdrop-filter: none !important;
-            }
+            ` : ''}
+            /* Aspect ratio handling */
             ${config.videoAspectMode === 'fill' ? `
-            /* Fullscreen Zoom-to-Fill: expands 4:3 / 1.5:1 music videos to fill the 16:9 TV screen with zero black sidebars */
-            .html5-main-video, ytlr-player video, #player video {
-                transform: scale(1.34) !important;
-                transform-origin: center center !important;
+            .html5-main-video {
+                object-fit: cover !important;
             }
             ` : config.videoAspectMode === 'stretch' ? `
-            /* Fullscreen 16:9 Stretch: stretches 4:3 video horizontally edge-to-edge without cropping top/bottom */
-            .html5-main-video, ytlr-player video, #player video {
-                transform: scaleX(1.34) !important;
-                transform-origin: center center !important;
+            .html5-main-video {
+                object-fit: fill !important;
             }
-            ` : ''}
-            ${config.fastMode ? `
-            /* Snappy 70ms D-pad tile focus transitions without laggy multi-layer repaints */
-            ytlr-tile-renderer, ytlr-button-renderer {
-                transition-duration: 70ms !important;
+            ` : `
+            .html5-main-video {
+                object-fit: contain !important;
             }
-            /* Disable animated video previews while scrolling the home grid so D-pad scrolling stays 60fps */
-            ytlr-tile-renderer ytlr-thumbnail-details + div video {
-                display: none !important;
-            }
-            ` : ''}
+            `}
         `;
     }
 
@@ -236,356 +159,180 @@
         document.addEventListener('DOMContentLoaded', applyCustomCss);
     }
 
-    function formatSpeedLabel(s) {
-        const n = Number(s) || 1.0;
-        return n.toFixed(2).replace(/\.00$/, '.0').replace(/(\.\d)0$/, '$1') + 'x';
-    }
-
     // ---------------------------------------------------------------------------
-    // 2. MANUAL SPONSORBLOCK SKIP PROMPT BANNER (When category is set to 'manual')
+    // 3. SPONSORBLOCK CLIENT & MANUAL SKIP PROMPT
     // ---------------------------------------------------------------------------
+    let currentVideoId = null;
+    let videoSegments = [];
+    let segmentsLoading = false;
     let activeManualSegment = null;
     let dismissedSegmentUuid = null;
 
-    function showManualSkipPrompt(seg, meta) {
-        activeManualSegment = seg;
-        const end = Math.round(Number(seg.segment[1]) - Number(seg.segment[0]));
-        try {
-            if (BRIDGE && BRIDGE.onManualSkipPromptState) {
-                BRIDGE.onManualSkipPromptState(true, seg.segment[1], meta.name, end);
-            }
-        } catch (e) {}
-
-        let el = document.getElementById('vagiiark-manual-skip');
-        if (!el && document.body) {
+    function createManualSkipPrompt() {
+        let el = document.getElementById('vagiiark-skip-prompt');
+        if (!el) {
             el = document.createElement('div');
-            el.id = 'vagiiark-manual-skip';
-            el.style.cssText = [
-                'position:fixed',
-                'bottom:125px',
-                'right:48px',
-                'z-index:2147483646',
-                'background:rgba(18,20,28,0.95)',
-                'color:#FFFFFF',
-                'padding:14px 22px',
-                'border-radius:28px',
-                'border:2px solid #00E676',
-                'font-family:Roboto,sans-serif',
-                'font-size:18px',
-                'font-weight:600',
-                'display:none',
-                'align-items:center',
-                'gap:12px'
-            ].join(';');
+            el.id = 'vagiiark-skip-prompt';
+            el.tabIndex = 0;
+            el.style.cssText = `
+                position: fixed;
+                bottom: 60px;
+                right: 60px;
+                z-index: 999999;
+                background: rgba(18, 22, 32, 0.94);
+                border: 2px solid #00E676;
+                border-radius: 28px;
+                padding: 14px 28px;
+                color: #FFFFFF;
+                font-family: sans-serif;
+                font-size: 18px;
+                font-weight: bold;
+                display: none;
+                align-items: center;
+                gap: 12px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+                cursor: pointer;
+            `;
+            el.addEventListener('click', skipActiveManualSegment);
+            el.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.keyCode === 13 || e.keyCode === 23) {
+                    skipActiveManualSegment();
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            });
             document.body.appendChild(el);
         }
-        if (el) {
-            el.style.borderColor = meta.color || '#00E676';
-            el.innerHTML = `<span style="background:${meta.color || '#00E676'};color:#000;padding:3px 10px;border-radius:12px;font-size:14px;font-weight:700">PRESS OK</span>`
-                + `<span>Skip ${meta.name} (${end}s)</span>`;
-            el.style.display = 'flex';
-        }
+        return el;
+    }
+
+    function showManualSkipPrompt(seg, label, color) {
+        activeManualSegment = seg;
+        const prompt = createManualSkipPrompt();
+        prompt.style.borderColor = color || '#00E676';
+        prompt.innerHTML = `
+            <span style="color:${color || '#00E676'}">⏭ Skip ${label || 'Segment'}</span>
+            <span style="background:#2A354A; padding:4px 10px; border-radius:14px; font-size:14px;">Press OK</span>
+        `;
+        prompt.style.display = 'flex';
+        prompt.focus();
     }
 
     function hideManualSkipPrompt() {
-        if (!activeManualSegment) return;
+        const prompt = document.getElementById('vagiiark-skip-prompt');
+        if (prompt) prompt.style.display = 'none';
         activeManualSegment = null;
-        try {
-            if (BRIDGE && BRIDGE.onManualSkipPromptState) {
-                BRIDGE.onManualSkipPromptState(false, 0, '', 0);
-            }
-        } catch (e) {}
-        const el = document.getElementById('vagiiark-manual-skip');
-        if (el) el.style.display = 'none';
     }
 
-    window.__vagiiArkTriggerManualSkip = function () {
-        if (!activeManualSegment) return false;
+    function skipActiveManualSegment() {
+        if (!activeManualSegment) return;
         const video = document.querySelector('video');
-        if (!video) return false;
-        const end = Number(activeManualSegment.segment[1]);
-        const saved = Math.max(1, Math.round(end - video.currentTime));
-        const cat = activeManualSegment.category || 'sponsor';
-        const meta = CATEGORY_LABELS[cat] || { name: cat, color: '#00E676' };
-        dismissedSegmentUuid = activeManualSegment.UUID || (activeManualSegment.segment[0] + '-' + activeManualSegment.segment[1]);
+        if (video) {
+            video.currentTime = activeManualSegment.end;
+            if (BRIDGE && BRIDGE.recordSponsorSkipped) {
+                BRIDGE.recordSponsorSkipped(activeManualSegment.category, activeManualSegment.end - activeManualSegment.start);
+            }
+            if (BRIDGE && BRIDGE.showToast) {
+                BRIDGE.showToast("Skipped " + formatCategoryName(activeManualSegment.category), "#00E676");
+            }
+        }
+        dismissedSegmentUuid = activeManualSegment.uuid;
         hideManualSkipPrompt();
-
-        video.currentTime = end;
-        config.stats.segmentsSkipped++;
-        config.stats.secondsSaved += saved;
-        if (BRIDGE && BRIDGE.showNativeToast) {
-            BRIDGE.showNativeToast(`Skipped ${meta.name} • Saved ${saved}s`, meta.color);
-        }
-        if (BRIDGE && BRIDGE.onSegmentSkipped) {
-            BRIDGE.onSegmentSkipped(cat, saved);
-        }
-        return true;
-    };
-
-    // ---------------------------------------------------------------------------
-    // 3. ZERO-OVERHEAD INNERTUBE JSON AD-STRIPPER
-    // ---------------------------------------------------------------------------
-    const AD_KEYS = [
-        'adPlacements',
-        'playerAds',
-        'adSlots',
-        'masthead'
-    ];
-
-    function stripAdsFromObject(obj, depth) {
-        if (!config.adblockEnabled || !obj || typeof obj !== 'object' || depth > 5) return obj;
-        let stripped = 0;
-
-        for (let i = 0; i < AD_KEYS.length; i++) {
-            const key = AD_KEYS[i];
-            if (key in obj && obj[key] != null) {
-                if (Array.isArray(obj[key])) {
-                    if (obj[key].length > 0) {
-                        obj[key] = [];
-                        stripped++;
-                    }
-                } else {
-                    delete obj[key];
-                    stripped++;
-                }
-            }
-        }
-
-        if (Array.isArray(obj.contents)) {
-            const before = obj.contents.length;
-            obj.contents = obj.contents.filter(item => {
-                if (!item || typeof item !== 'object') return true;
-                return !(
-                    item.adSlotRenderer ||
-                    item.promotedVideoRenderer ||
-                    item.promotedSparklesWebRenderer ||
-                    item.mastheadAdRenderer ||
-                    (item.richItemRenderer && item.richItemRenderer.content && item.richItemRenderer.content.adSlotRenderer)
-                );
-            });
-            if (obj.contents.length < before) {
-                stripped += (before - obj.contents.length);
-            }
-        }
-
-        if (stripped > 0) {
-            config.stats.adsBlocked += stripped;
-            try {
-                if (BRIDGE && BRIDGE.onAdBlocked) BRIDGE.onAdBlocked(stripped);
-            } catch (e) {}
-        }
-
-        for (const k in obj) {
-            if (Object.prototype.hasOwnProperty.call(obj, k)) {
-                const val = obj[k];
-                if (val && typeof val === 'object') {
-                    if (
-                        k === 'playerResponse' ||
-                        k === 'contents' ||
-                        k === 'tvBrowseRenderer' ||
-                        k === 'sectionListRenderer' ||
-                        k === 'shelfRenderer' ||
-                        k === 'horizontalListRenderer' ||
-                        k === 'gridRenderer' ||
-                        depth < 2
-                    ) {
-                        stripAdsFromObject(val, depth + 1);
-                    }
-                }
-            }
-        }
-        return obj;
     }
 
-    function detectVideoIdFromPlayerPayload(obj) {
-        if (!obj || typeof obj !== 'object') return;
-        const details = obj.videoDetails || (obj.playerResponse && obj.playerResponse.videoDetails);
-        if (details && details.videoId) {
-            onVideoDetected(details.videoId, details.title || '');
-        }
-    }
-
-    const origJsonParse = JSON.parse;
-    JSON.parse = function (text, reviver) {
-        const parsed = origJsonParse.call(this, text, reviver);
-        try {
-            if (parsed && typeof parsed === 'object' && typeof text === 'string' && text.length > 120) {
-                if (text.indexOf('"videoDetails"') !== -1) {
-                    detectVideoIdFromPlayerPayload(parsed);
-                }
-                if (
-                    config.adblockEnabled &&
-                    (text.indexOf('adPlacements') !== -1 ||
-                     text.indexOf('playerAds') !== -1 ||
-                     text.indexOf('adSlots') !== -1 ||
-                     text.indexOf('masthead') !== -1 ||
-                     text.indexOf('adSlotRenderer') !== -1)
-                ) {
-                    stripAdsFromObject(parsed, 0);
-                }
-            }
-        } catch (e) {}
-        return parsed;
-    };
-
-    if (window.Response && Response.prototype && Response.prototype.json) {
-        const origResJson = Response.prototype.json;
-        Response.prototype.json = function () {
-            return origResJson.call(this).then(data => {
-                try {
-                    detectVideoIdFromPlayerPayload(data);
-                    stripAdsFromObject(data, 0);
-                } catch (e) {}
-                return data;
-            });
+    function formatCategoryName(cat) {
+        const map = {
+            sponsor: 'Sponsor',
+            selfpromo: 'Self Promotion',
+            interaction: 'Subscribe Reminder',
+            intro: 'Intro',
+            outro: 'Credits',
+            preview: 'Preview',
+            music_offtopic: 'Non-Music Part'
         };
+        return map[cat] || cat;
     }
 
-    // ---------------------------------------------------------------------------
-    // 4. EVENT-DRIVEN SPONSORBLOCK & SPEED ENGINE (Zero 250ms DOM Polling!)
-    // ---------------------------------------------------------------------------
-    let currentVideoId = null;
-    let currentVideoTitle = '';
-    let currentSegments = [];
-    let lastSkipEndTime = -1;
-
-    const CATEGORY_LABELS = {
-        sponsor: { name: 'Sponsor', color: '#00D400' },
-        selfpromo: { name: 'Unpaid / Self Promo', color: '#FFFF00' },
-        interaction: { name: 'Interaction Reminder', color: '#CC00FF' },
-        intro: { name: 'Intermission / Intro', color: '#00FFFF' },
-        outro: { name: 'Endcards / Credits', color: '#0202ED' },
-        preview: { name: 'Preview / Recap', color: '#008FD6' },
-        music_offtopic: { name: 'Non-Music Section', color: '#FF9900' }
-    };
-
-    function getCategoryMode(cat) {
-        const val = config.categories[cat];
-        if (val === true || val === 'auto') return 'auto';
-        if (val === 'manual') return 'manual';
-        return 'off';
+    function getCategoryColor(cat) {
+        const map = {
+            sponsor: '#00E676',
+            selfpromo: '#FFD600',
+            interaction: '#E040FB',
+            intro: '#00E5FF',
+            outro: '#3D5AFE',
+            preview: '#00B0FF',
+            music_offtopic: '#FF9100'
+        };
+        return map[cat] || '#00E676';
     }
 
-    function getActiveCategoriesList() {
-        const list = [];
-        for (const k in CATEGORY_LABELS) {
-            if (getCategoryMode(k) !== 'off') list.push(k);
-        }
-        return list;
-    }
-
-    function onVideoDetected(videoId, title) {
-        if (!videoId || videoId === currentVideoId) return;
-        currentVideoId = videoId;
-        currentVideoTitle = title || '';
-        currentSegments = [];
-        lastSkipEndTime = -1;
-        dismissedSegmentUuid = null;
-        hideManualSkipPrompt();
-
+    async function fetchSponsorSegments(videoId) {
+        if (!videoId || !config.sponsorBlockEnabled) return;
+        segmentsLoading = true;
+        videoSegments = [];
         try {
-            if (BRIDGE && BRIDGE.onVideoChanged) {
-                BRIDGE.onVideoChanged(videoId, currentVideoTitle);
+            const cats = Object.keys(config.categories).filter(c => config.categories[c] !== 'off');
+            if (cats.length === 0) return;
+            const url = `https://sponsor.ajay.app/api/skipSegments?videoID=${videoId}&categories=${encodeURIComponent(JSON.stringify(cats))}`;
+            const res = await fetch(url);
+            if (res.ok) {
+                const data = await res.json();
+                videoSegments = data.map(item => ({
+                    uuid: item.UUID,
+                    start: item.segment[0],
+                    end: item.segment[1],
+                    category: item.category
+                }));
             }
-        } catch (e) {}
-
-        if (!config.sponsorBlockEnabled) return;
-        const activeCats = getActiveCategoriesList();
-        if (activeCats.length === 0) return;
-
-        try {
-            if (BRIDGE && BRIDGE.fetchSponsorSegments) {
-                BRIDGE.fetchSponsorSegments(videoId, JSON.stringify(activeCats));
-            }
-        } catch (e) {}
-    }
-
-    window.__vagiiArkSetSegments = function (videoId, segments) {
-        if (videoId !== currentVideoId) return;
-        currentSegments = Array.isArray(segments) ? segments : [];
-        if (currentSegments.length > 0 && BRIDGE && BRIDGE.showNativeToast) {
-            BRIDGE.showNativeToast(
-                `SponsorBlock Ready • ${currentSegments.length} segment${currentSegments.length > 1 ? 's' : ''}`,
-                '#00B0FF'
-            );
-        }
-    };
-
-    function extractVideoIdFromUrl() {
-        try {
-            const href = location.href || '';
-            const hash = location.hash || '';
-            let m = href.match(/[?&]v=([a-zA-Z0-9_-]{11})/) || hash.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-            if (m && m[1]) return m[1];
-        } catch (e) {}
-        return null;
-    }
-
-    function enforceVideoSpeed(video) {
-        if (!video) return;
-        const target = Number(config.speed) || 1.0;
-        if (Math.abs(video.playbackRate - target) > 0.01) {
-            video.playbackRate = target;
+        } catch (e) {} finally {
+            segmentsLoading = false;
         }
     }
 
-    function checkSponsorBlockSegments(video) {
-        if (!config.sponsorBlockEnabled || !video || video.paused || currentSegments.length === 0) {
-            hideManualSkipPrompt();
+    function checkSponsorBlock(video) {
+        if (!config.sponsorBlockEnabled || !videoSegments.length || video.paused) {
+            if (activeManualSegment) hideManualSkipPrompt();
             return;
         }
-        const now = video.currentTime;
-        let inManualSegment = false;
-
-        for (let i = 0; i < currentSegments.length; i++) {
-            const seg = currentSegments[i];
-            if (!seg || !Array.isArray(seg.segment)) continue;
-            const start = Number(seg.segment[0]);
-            const end = Number(seg.segment[1]);
-            const cat = seg.category || 'sponsor';
-            const mode = getCategoryMode(cat);
-            if (mode === 'off') continue;
-
-            if (now >= start && now < end - 0.25) {
-                const meta = CATEGORY_LABELS[cat] || { name: cat, color: '#00E676' };
-                const segId = seg.UUID || (start + '-' + end);
-
-                if (mode === 'auto') {
-                    if (Math.abs(lastSkipEndTime - end) < 0.8 && Math.abs(now - start) > 2.0) {
-                        continue;
-                    }
-                    lastSkipEndTime = end;
-                    const saved = Math.max(1, Math.round(end - now));
-                    video.currentTime = end;
-                    config.stats.segmentsSkipped++;
-                    config.stats.secondsSaved += saved;
-
-                    if (BRIDGE && BRIDGE.showNativeToast) {
-                        BRIDGE.showNativeToast(`Auto-Skipped ${meta.name} • Saved ${saved}s`, meta.color);
-                    }
-                    if (BRIDGE && BRIDGE.onSegmentSkipped) {
-                        BRIDGE.onSegmentSkipped(cat, saved);
-                    }
-                    hideManualSkipPrompt();
-                    return;
-                } else if (mode === 'manual') {
-                    if (dismissedSegmentUuid !== segId) {
-                        inManualSegment = true;
-                        showManualSkipPrompt(seg, meta);
-                    }
-                    break;
-                }
+        const time = video.currentTime;
+        let matched = null;
+        for (const seg of videoSegments) {
+            if (time >= (seg.start - 0.25) && time < (seg.end - 0.3)) {
+                matched = seg;
+                break;
             }
         }
 
-        if (!inManualSegment && activeManualSegment) {
-            hideManualSkipPrompt();
+        if (!matched) {
+            if (activeManualSegment) hideManualSkipPrompt();
+            return;
+        }
+
+        const mode = config.categories[matched.category] || 'auto';
+        if (mode === 'auto') {
+            video.currentTime = matched.end;
+            if (BRIDGE && BRIDGE.recordSponsorSkipped) {
+                BRIDGE.recordSponsorSkipped(matched.category, matched.end - matched.start);
+            }
+            if (BRIDGE && BRIDGE.showToast) {
+                BRIDGE.showToast("Skipped " + formatCategoryName(matched.category), getCategoryColor(matched.category));
+            }
+        } else if (mode === 'manual') {
+            if (dismissedSegmentUuid !== matched.uuid && (!activeManualSegment || activeManualSegment.uuid !== matched.uuid)) {
+                showManualSkipPrompt(matched, formatCategoryName(matched.category), getCategoryColor(matched.category));
+            }
         }
     }
 
-    // Use lightweight event delegation on <video> events instead of 250ms setInterval polling!
-    let lastQualityForcedVideoId = null;
-    function forceHighQualityOnPlayer(vId) {
+    // ---------------------------------------------------------------------------
+    // 4. QUALITY & SPEED ENFORCEMENT
+    // ---------------------------------------------------------------------------
+    let qualityAppliedForVideoId = null;
+
+    function applyInitial1080pQuality(vId) {
+        if (!vId || qualityAppliedForVideoId === vId) return;
+        qualityAppliedForVideoId = vId;
+
         try {
             const mp = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
             if (mp) {
@@ -595,88 +342,134 @@
                 if (typeof mp.setPlaybackQuality === 'function') {
                     mp.setPlaybackQuality('hd1080');
                 }
-                if (vId) lastQualityForcedVideoId = vId;
             }
         } catch (e) {}
     }
 
-    document.addEventListener('loadedmetadata', function (e) {
-        const video = e.target;
-        if (video && video.tagName === 'VIDEO') {
-            video.removeAttribute('poster');
-            enforceVideoSpeed(video);
-            const vId = extractVideoIdFromUrl() || currentVideoId;
-            forceHighQualityOnPlayer(vId);
-            if (vId) onVideoDetected(vId, document.title || '');
+    function enforceSpeed(video) {
+        if (!video || !config.speed) return;
+        if (Math.abs(video.playbackRate - config.speed) > 0.01) {
+            video.playbackRate = config.speed;
         }
-    }, true);
+    }
 
+    function extractVideoId() {
+        try {
+            const href = window.location.href;
+            const match = href.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+            if (match) return match[1];
+            const hashMatch = href.match(/watch\?v=([a-zA-Z0-9_-]{11})/);
+            if (hashMatch) return hashMatch[1];
+        } catch (e) {}
+        return null;
+    }
+
+    // ---------------------------------------------------------------------------
+    // 5. ON-SCREEN VAGIIARK SETTINGS BUTTON (Easy D-pad Access)
+    // ---------------------------------------------------------------------------
+    function injectSettingsButton() {
+        if (document.getElementById('vagiiark-settings-btn')) return;
+        const container = document.body;
+        if (!container) return;
+
+        const btn = document.createElement('div');
+        btn.id = 'vagiiark-settings-btn';
+        btn.tabIndex = 0;
+        btn.title = "Open VagiiArk Settings";
+        btn.style.cssText = `
+            position: fixed;
+            bottom: 24px;
+            left: 24px;
+            z-index: 99999;
+            background: rgba(20, 25, 36, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 20px;
+            padding: 8px 16px;
+            color: #FFFFFF;
+            font-family: sans-serif;
+            font-size: 13px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        `;
+        btn.innerHTML = `<span style="color:#448AFF">⚡</span> <span>VagiiArk</span>`;
+
+        btn.addEventListener('focus', function () {
+            btn.style.background = '#2979FF';
+            btn.style.borderColor = '#FFFFFF';
+            btn.style.transform = 'scale(1.08)';
+        });
+        btn.addEventListener('blur', function () {
+            btn.style.background = 'rgba(20, 25, 36, 0.88)';
+            btn.style.borderColor = 'rgba(255, 255, 255, 0.25)';
+            btn.style.transform = 'scale(1.0)';
+        });
+        btn.addEventListener('click', function () {
+            if (BRIDGE && BRIDGE.openQuickMenuFromJs) {
+                BRIDGE.openQuickMenuFromJs();
+            }
+        });
+        btn.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.keyCode === 13 || e.keyCode === 23) {
+                if (BRIDGE && BRIDGE.openQuickMenuFromJs) {
+                    BRIDGE.openQuickMenuFromJs();
+                }
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
+
+        container.appendChild(btn);
+    }
+
+    // ---------------------------------------------------------------------------
+    // 6. EVENT DELEGATION & LOOP
+    // ---------------------------------------------------------------------------
     document.addEventListener('play', function (e) {
-        const video = e.target;
-        if (video && video.tagName === 'VIDEO') {
-            video.removeAttribute('poster');
-            enforceVideoSpeed(video);
-            const vId = extractVideoIdFromUrl() || currentVideoId;
-            if (vId && vId !== lastQualityForcedVideoId) {
-                forceHighQualityOnPlayer(vId);
+        if (e.target && e.target.tagName === 'VIDEO') {
+            const video = e.target;
+            enforceSpeed(video);
+            const vId = extractVideoId();
+            if (vId && vId !== currentVideoId) {
+                currentVideoId = vId;
+                applyInitial1080pQuality(vId);
+                fetchSponsorSegments(vId);
             }
         }
     }, true);
 
-    document.addEventListener('ratechange', function (e) {
-        const video = e.target;
-        if (video && video.tagName === 'VIDEO') {
-            enforceVideoSpeed(video);
-        }
-    }, true);
-
-    let lastTimeCheckMs = 0;
     document.addEventListener('timeupdate', function (e) {
-        const nowMs = Date.now();
-        if (nowMs - lastTimeCheckMs < 350) return;
-        lastTimeCheckMs = nowMs;
-        const video = e.target;
-        if (video && video.tagName === 'VIDEO') {
-            checkSponsorBlockSegments(video);
+        if (e.target && e.target.tagName === 'VIDEO') {
+            checkSponsorBlock(e.target);
         }
     }, true);
 
-    window.addEventListener('hashchange', function () {
-        const vId = extractVideoIdFromUrl();
-        if (vId) onVideoDetected(vId, document.title || '');
-    });
-
-    // ---------------------------------------------------------------------------
-    // 5. LIVE API FOR NATIVE QUICK-SETTINGS OVERLAY PANEL
-    // ---------------------------------------------------------------------------
-    window.__vagiiArkSetSpeed = function (speed) {
-        const s = Math.max(0.25, Math.min(4.0, Number(speed) || 1.0));
-        config.speed = s;
+    setInterval(function () {
+        injectSettingsButton();
         const video = document.querySelector('video');
-        if (video) video.playbackRate = s;
-        if (BRIDGE && BRIDGE.showNativeToast) {
-            BRIDGE.showNativeToast(`Playback Speed: ${formatSpeedLabel(s)}`, '#FFD600');
+        if (video) {
+            enforceSpeed(video);
+            const vId = extractVideoId();
+            if (vId && vId !== currentVideoId) {
+                currentVideoId = vId;
+                applyInitial1080pQuality(vId);
+                fetchSponsorSegments(vId);
+            }
         }
-    };
+    }, 1000);
 
-    window.__vagiiArkStepSpeed = function (delta) {
-        const next = Math.round(((Number(config.speed) || 1.0) + delta) * 4) / 4;
-        const clamped = Math.max(0.25, Math.min(4.0, next));
-        window.__vagiiArkSetSpeed(clamped);
-        try {
-            if (BRIDGE && BRIDGE.onSpeedChangedFromJs) BRIDGE.onSpeedChangedFromJs(clamped);
-        } catch (e) {}
-    };
-
+    // Dynamic config update from Java
     window.__vagiiArkUpdateConfig = function (newConfig) {
-        if (!newConfig || typeof newConfig !== 'object') return;
+        if (!newConfig) return;
         Object.assign(config, newConfig);
         if (newConfig.categories) Object.assign(config.categories, newConfig.categories);
         applyCustomCss();
         const video = document.querySelector('video');
-        if (video) enforceVideoSpeed(video);
-        if (currentVideoId && config.sponsorBlockEnabled && BRIDGE && BRIDGE.fetchSponsorSegments) {
-            BRIDGE.fetchSponsorSegments(currentVideoId, JSON.stringify(getActiveCategoriesList()));
-        }
+        if (video) enforceSpeed(video);
     };
+
 })();

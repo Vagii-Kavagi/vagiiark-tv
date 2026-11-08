@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace 'io.github.twoarchiver.ytark'
+    namespace 'com.vagiiark.tv'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'io.github.twoarchiver.ytark'
+        applicationId 'com.vagiiark.tv'
         minSdk 26
         targetSdk 34
-        versionCode 160
-        versionName '1.6.0'
+        versionCode 170
+        versionName '1.7.0'
     }
 
     buildTypes {
